@@ -34,3 +34,7 @@ htmlcov/
 Thumbs.db
 .idea/
 .vscode/
+# 本地 LLM 凭据与缓存
+.env
+settings_DS.json
+llm_cache.json

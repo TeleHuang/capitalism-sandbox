@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>资本主义经济模拟 · 六边形地块预览</title>
+  <style>
+    :root {
+      --ink: #24342b;
+      --paper: #f4eedf;
+      --grass: #8fbf72;
+      --grass-dark: #6fa15a;
+      --forest: #3f704b;
+      --field: #d9b44a;
+      --field-dark: #b58a2f;
+      --river: #6eb7d6;
+      --mountain: #8d8a86;
+      --mountain-dark: #68645f;
+      --city: #c9b28a;
+      --steel: #6c7f91;
+      --machinery: #d58a3a;
+      --brick: #b65a45;
+      --fertilizer: #4d9a86;
+      --textile: #8b6aa8;
+      --construction: #c99a42;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 10%, #fff9e8 0, transparent 38%),
+        radial-gradient(circle at 85% 85%, #e7ddc2 0, transparent 40%),
+        #f4eedf;
+      font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+    header {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 24px 4px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      letter-spacing: 0.02em;
+    }
+    .subtitle {
+      margin: 0;
+      color: #5d6d60;
+      font-size: 14px;
+    }
+    .stage {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 8px 20px 28px;
+    }
+    #map {
+      width: 100%;
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 10px 24px rgba(60, 54, 38, 0.16));
+    }
+    .hex {
+      stroke: #5f7a57;
+      stroke-width: 3;
+      transition: filter 160ms ease;
+    }
+    .hex:hover { filter: brightness(1.04); }
+    .tile-label {
+      font-size: 22px;
+      font-weight: 700;
+      fill: #2c402f;
+      paint-order: stroke;
+      stroke: rgba(255, 255, 255, 0.72);
+      stroke-width: 5px;
+      pointer-events: none;
+    }
+    .entity {
+      cursor: pointer;
+      transition: filter 160ms ease;
+    }
+    .entity:hover { filter: brightness(1.08); }
+    .scale-badge {
+      font-size: 19px;
+      font-weight: 800;
+      fill: #22c55e;
+      stroke: #ffffff;
+      stroke-width: 5px;
+      paint-order: stroke;
+      pointer-events: none;
+    }
+    .count-badge {
+      fill: #dc2626;
+      stroke: #ffffff;
+      stroke-width: 2.5;
+    }
+    .count-text {
+      fill: #fff;
+      font-size: 15px;
+      font-weight: 800;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+    .entity-label {
+      font-size: 13px;
+      font-weight: 700;
+      fill: #223426;
+      text-anchor: middle;
+      paint-order: stroke;
+      stroke: rgba(255, 255, 255, 0.8);
+      stroke-width: 4px;
+      pointer-events: none;
+    }
+    .small-note {
+      font-size: 12px;
+      fill: #3f5142;
+      text-anchor: middle;
+      paint-order: stroke;
+      stroke: rgba(255, 255, 255, 0.8);
+      stroke-width: 4px;
+      pointer-events: none;
+    }
+    #tooltip {
+      position: fixed;
+      z-index: 10;
+      max-width: 280px;
+      padding: 10px 12px;
+      border: 1px solid #b8ae95;
+      border-radius: 10px;
+      background: rgba(255, 252, 243, 0.97);
+      box-shadow: 0 8px 24px rgba(50, 45, 32, 0.2);
+      font-size: 13px;
+      line-height: 1.55;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -110%);
+      transition: opacity 120ms ease;
+    }
+    #tooltip.show { opacity: 1; }
+    #tooltip strong { color: #2e4a34; }
+    footer {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 24px 30px;
+      color: #687669;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>资本主义经济模拟 · 六边形地块预览</h1>
+    <p class="subtitle">这是 UI 视觉原型，尚未接入仿真引擎。中心是城市，六个地块按行业分布；数字为规模等级，红色 ×N 为合并数量。</p>
+  </header>
+
+  <main class="stage">
+    <svg id="map" viewBox="0 0 1200 930" role="img" aria-label="六边形地块经济地图预览"></svg>
+  </main>
+
+  <footer>提示：悬停或点击图标查看摘要。正式发行版会把这张地图和真实仿真数据绑定，并保持单文件 HTML。</footer>
+  <div id="tooltip"></div>
+
+  <script>
+    // 六边形地块：中心 + 六个邻居。使用平顶六边形，视觉上更接近手绘布局。
+    const R = 155;
+    const CX = 600;
+    const CY = 465;
+    const hexes = {
+      city:        { cx: CX,        cy: CY,        label: "城市", terrain: "city" },
+      machinery:   { cx: CX - 0.866 * R, cy: CY - 1.5 * R, label: "机械", terrain: "plain" },
+      steel:       { cx: CX + 0.866 * R, cy: CY - 1.5 * R, label: "钢铁", terrain: "plain" },
+      agriculture: { cx: CX - 1.732 * R, cy: CY,        label: "农业", terrain: "farm" },
+      mine:        { cx: CX + 1.732 * R, cy: CY,        label: "矿场", terrain: "mine" },
+      fertilizer:  { cx: CX - 0.866 * R, cy: CY + 1.5 * R, label: "化肥", terrain: "plain" },
+      brick:       { cx: CX + 0.866 * R, cy: CY + 1.5 * R, label: "砖厂", terrain: "plain" }
+    };
+
+    const svg = document.getElementById("map");
+    const tooltip = document.getElementById("tooltip");
+    const NS = "http://www.w3.org/2000/svg";
+
+    function el(name, attrs = {}, parent = svg) {
+      const node = document.createElementNS(NS, name);
+      for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+      parent.appendChild(node);
+      return node;
+    }
+
+    function hexPoints(cx, cy, r) {
+      const points = [];
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i + Math.PI / 6;
+        points.push(`${(cx + r * Math.cos(angle)).toFixed(2)},${(cy + r * Math.sin(angle)).toFixed(2)}`);
+      }
+      return points.join(" ");
+    }
+
+    // 简单卡通树：树冠 + 树干
+    function drawTree(x, y, scale = 1) {
+      const g = el("g", { transform: `translate(${x} ${y}) scale(${scale})` });
+      el("rect", { x: -3, y: 14, width: 6, height: 18, rx: 2, fill: "#8a6540" }, g);
+      el("circle", { cx: 0, cy: 2, r: 13, fill: "#4f8657" }, g);
+      el("circle", { cx: -6, cy: 8, r: 9, fill: "#5f9864" }, g);
+      el("circle", { cx: 7, cy: 9, r: 8, fill: "#3f714b" }, g);
+      return g;
+    }
+
+    function drawGrass(cx, cy, terrain) {
+      const g = el("g", {});
+      if (terrain === "farm") {
+        // 小河：从左上穿过农田，保持细小
+        el("path", {
+          d: `M ${cx - 125} ${cy - 40} C ${cx - 70} ${cy - 15}, ${cx - 40} ${cy + 60}, ${cx + 20} ${cy + 70} S ${cx + 100} ${cy + 40}, ${cx + 125} ${cy + 85}`,
+          fill: "none", stroke: "var(--river)", "stroke-width": 12, "stroke-linecap": "round", opacity: 0.9
+        }, g);
+        el("path", {
+          d: `M ${cx - 125} ${cy - 40} C ${cx - 70} ${cy - 15}, ${cx - 40} ${cy + 60}, ${cx + 20} ${cy + 70} S ${cx + 100} ${cy + 40}, ${cx + 125} ${cy + 85}`,
+          fill: "none", stroke: "#b8e4f1", "stroke-width": 4, "stroke-linecap": "round", opacity: 0.8
+        }, g);
+        // 金黄网格农田
+        for (let row = 0; row < 3; row++) {
+          for (let col = 0; col < 4; col++) {
+            const x = cx - 78 + col * 44;
+            const y = cy + 4 + row * 35;
+            el("polygon", {
+              points: `${x},${y} ${x + 40},${y - 4} ${x + 44},${y + 25} ${x + 3},${y + 30}`,
+              fill: row % 2 ? "var(--field)" : "var(--field-dark)",
+              stroke: "#f7e7a8", "stroke-width": 1.5, opacity: 0.95
+            }, g);
+          }
+        }
+        // 左上森林
+        drawTree(cx - 92, cy - 72, 0.95);
+        drawTree(cx - 62, cy - 88, 0.8);
+        drawTree(cx - 110, cy - 42, 0.75);
+      } else if (terrain === "mine") {
+        // 山体与矿洞
+        el("polygon", {
+          points: `${cx - 125},${cy + 55} ${cx - 55},${cy - 95} ${cx + 10},${cy + 55}`,
+          fill: "var(--mountain)", stroke: "#6c6862", "stroke-width": 3
+        }, g);
+        el("polygon", {
+          points: `${cx - 65},${cy - 65} ${cx - 40},${cy - 100} ${cx - 10},${cy - 65}`,
+          fill: "#f0eee7", opacity: 0.95
+        }, g);
+        el("polygon", {
+          points: `${cx - 20},${cy + 55} ${cx + 45},${cy - 55} ${cx + 115},${cy + 55}`,
+          fill: "var(--mountain-dark)", stroke: "#5a5650", "stroke-width": 3
+        }, g);
+        el("path", {
+          d: `M ${cx - 12} ${cy + 55} Q ${cx + 8} ${cy + 10}, ${cx + 28} ${cy + 55}`,
+          fill: "#3f3a33", stroke: "#2f2b26", "stroke-width": 2
+        }, g);
+      } else if (terrain === "city") {
+        // 城市地块的建筑轮廓
+        el("rect", { x: cx - 125, y: cy - 80, width: 62, height: 95, rx: 5, fill: "#cdb795", stroke: "#8f7d60", "stroke-width": 2 }, g);
+        el("rect", { x: cx - 48, y: cy - 100, width: 82, height: 115, rx: 6, fill: "#dbc9aa", stroke: "#8f7d60", "stroke-width": 2 }, g);
+        el("rect", { x: cx + 48, y: cy - 55, width: 58, height: 70, rx: 5, fill: "#c7ae86", stroke: "#8f7d60", "stroke-width": 2 }, g);
+        for (let i = 0; i < 3; i++) {
+          el("rect", { x: cx - 38, y: cy - 82 + i * 26, width: 12, height: 12, rx: 2, fill: "#6f8fa4" }, g);
+          el("rect", { x: cx - 14, y: cy - 82 + i * 26, width: 12, height: 12, rx: 2, fill: "#6f8fa4" }, g);
+        }
+        el("path", { d: `M ${cx + 60} ${cy - 55} L ${cx + 60} ${cy - 90} L ${cx + 96} ${cy - 90}`, fill: "none", stroke: "#8f7d60", "stroke-width": 3 }, g);
+      } else {
+        // 平原：草地上的稀疏森林
+        drawTree(cx - 92, cy - 62, 0.9);
+        drawTree(cx + 78, cy - 30, 0.75);
+        drawTree(cx - 10, cy + 86, 0.65);
+      }
+      return g;
+    }
+
+    function factoryIcon(x, y, color, tier, count, label, name, detail) {
+      const scale = 0.62 + tier * 0.045;
+      const g = el("g", {
+        class: "entity",
+        transform: `translate(${x} ${y}) scale(${scale})`,
+        "data-name": name,
+        "data-detail": detail
+      });
+      // 底座、屋顶、烟囱、窗户
+      el("rect", { x: -58, y: 0, width: 116, height: 58, rx: 8, fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+      el("polygon", { points: "-66,0 0,-46 66,0", fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+      el("rect", { x: 28, y: -42, width: 20, height: 34, rx: 4, fill: "#4b4b45", stroke: "#2f3b32", "stroke-width": 2 }, g);
+      el("rect", { x: -40, y: 18, width: 26, height: 22, rx: 3, fill: "#f4e9c8", opacity: 0.9 }, g);
+      el("rect", { x: 2, y: 18, width: 26, height: 22, rx: 3, fill: "#f4e9c8", opacity: 0.9 }, g);
+      el("circle", { cx: -28, cy: 64, r: 13, fill: "#3d403b" }, g);
+      el("circle", { cx: 28, cy: 64, r: 13, fill: "#3d403b" }, g);
+      // 右上角规模等级：绿色白边
+      el("text", { class: "scale-badge", x: 48, y: -42 }, g).textContent = tier;
+      // 合并数量：红色 ×N
+      if (count > 1) {
+        el("circle", { class: "count-badge", cx: 44, cy: 72, r: 21 }, g);
+        el("text", { class: "count-text", x: 44, y: 78 }, g).textContent = "×" + count;
+      }
+      el("text", { class: "entity-label", x: 0, y: 98 }, g).textContent = label;
+      return g;
+    }
+
+    function drawEntity(tileKey, x, y, options) {
+      const tile = hexes[tileKey];
+      return factoryIcon(tile.cx + x, tile.cy + y, options.color, options.tier, options.count, options.label, options.name, options.detail);
+    }
+
+    function drawEquipment(cx, cy, name, count, scales, label, color) {
+      const g = el("g", {
+        class: "entity",
+        transform: `translate(${cx} ${cy})`,
+        "data-name": name,
+        "data-detail": `${label}；数量 ${count}；规模 ${scales}`
+      });
+      // 农机/矿井设备：用一个简化的机械图标承载数量与规模
+      el("rect", { x: -50, y: -18, width: 100, height: 44, rx: 9, fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+      el("circle", { cx: -30, cy: 38, r: 16, fill: "#3d403b", stroke: "#20251f", "stroke-width": 2 }, g);
+      el("circle", { cx: 30, cy: 38, r: 16, fill: "#3d403b", stroke: "#20251f", "stroke-width": 2 }, g);
+      el("rect", { x: -22, y: -48, width: 44, height: 30, rx: 6, fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+      el("circle", { cx: 0, cy: 0, r: 17, fill: "#f4e9c8", opacity: 0.9 }, g);
+      el("text", { class: "scale-badge", x: 44, y: -38 }, g).textContent = String(scales).split("~").pop();
+      el("circle", { class: "count-badge", cx: 42, cy: 58, r: 21 }, g);
+      el("text", { class: "count-text", x: 42, y: 64 }, g).textContent = "×" + count;
+      el("text", { class: "entity-label", x: 0, y: 92 }, g).textContent = name;
+      el("text", { class: "small-note", x: 0, y: 112 }, g).textContent = `${label}：×${count} · 规模 ${scales}`;
+      return g;
+    }
+
+    function drawTile(key) {
+      const tile = hexes[key];
+      const g = el("g", {});
+      el("polygon", {
+        class: "hex",
+        points: hexPoints(tile.cx, tile.cy, R),
+        fill: tile.terrain === "mine" ? "#a8a49c" : tile.terrain === "city" ? "#d8c7a7" : "#99c47d"
+      }, g);
+      el("polygon", {
+        points: hexPoints(tile.cx, tile.cy - 2, R - 8),
+        fill: "none", stroke: "rgba(255,255,255,0.35)", "stroke-width": 2
+      }, g);
+      drawGrass(tile.cx, tile.cy, tile.terrain);
+      const labelY = (key === "fertilizer" || key === "brick") ? tile.cy - 55 : tile.cy - 112;
+      el("text", { class: "tile-label", x: tile.cx - 48, y: labelY }, g).textContent = tile.label;
+      return g;
+    }
+
+    // 先画地块，再画企业图标，保证图标浮在地形上方
+    Object.keys(hexes).forEach(drawTile);
+
+    // 示例企业：全部是视觉演示数据，不是真实仿真值
+    drawEntity("steel", 0, -22, { color: "var(--steel)", tier: 0, count: 3, label: "炼钢厂", name: "炼钢厂 ×3", detail: "规模 0；员工 12；月产约 300 吨钢" });
+    drawEntity("machinery", 0, -20, { color: "var(--machinery)", tier: 0, count: 1, label: "机械厂", name: "机械厂", detail: "规模 0；员工 10；手工锻炉" });
+    drawEntity("brick", 0, -18, { color: "var(--brick)", tier: 0, count: 12, label: "砖厂", name: "砖厂 ×12", detail: "规模 0；合并显示 12 座小砖窑" });
+    drawEntity("fertilizer", 0, -18, { color: "var(--fertilizer)", tier: 0, count: 2, label: "化肥厂", name: "化肥厂 ×2", detail: "规模 0；员工 6；月产约 30 吨化肥" });
+
+    // 城市：纺织厂 + 施工队
+    drawEntity("city", -62, 52, { color: "var(--textile)", tier: 0, count: 4, label: "纺织厂", name: "纺织厂 ×4", detail: "规模 0；员工 20；月产约 2000 件布" });
+    drawEntity("city", 62, 52, { color: "var(--construction)", tier: 0, count: 5, label: "施工队", name: "施工队 ×5", detail: "规模 0；员工 128；月产约 500 平米" });
+
+    // 农业/矿业：显示设备数量 + 规模
+    drawEquipment(hexes.agriculture.cx, hexes.agriculture.cy - 6, "农机", 58, "0~2", "农机", "var(--machinery)");
+    drawEquipment(hexes.mine.cx, hexes.mine.cy - 8, "矿井设备", 24, "0~2", "矿井设备", "var(--steel)");
+
+    // 一些空地块的稀疏树木已经在地形函数里绘制
+    // Tooltip 交互
+    svg.querySelectorAll(".entity").forEach((node) => {
+      node.addEventListener("mouseenter", (event) => {
+        tooltip.innerHTML = `<strong>${node.dataset.name}</strong><br>${node.dataset.detail}`;
+        tooltip.classList.add("show");
+        moveTooltip(event);
+      });
+      node.addEventListener("mousemove", moveTooltip);
+      node.addEventListener("mouseleave", () => tooltip.classList.remove("show"));
+      node.addEventListener("click", (event) => {
+        tooltip.innerHTML = `<strong>${node.dataset.name}</strong><br>${node.dataset.detail}`;
+        tooltip.classList.add("show");
+        moveTooltip(event);
+      });
+    });
+
+    function moveTooltip(event) {
+      tooltip.style.left = event.clientX + "px";
+      tooltip.style.top = event.clientY + "px";
+    }
+  </script>
+</body>
+</html>

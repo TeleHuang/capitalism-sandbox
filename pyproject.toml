@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capitalism-sandbox"
-version = "0.3.0"
+version = "0.3.1"
 description = "封闭资本主义经济的多智能体沙盒"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
+llm = ["requests>=2.31"]
 ui = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [project.scripts]

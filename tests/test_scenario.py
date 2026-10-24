@@ -41,6 +41,13 @@ class ScenarioTests(unittest.TestCase):
         # 初始粮食产出 120 吨、600 名农业工人（人均 0.20）。
         self.assertGreater(self.final["ag_productivity"], 0.21)
 
+    def test_240_month_run_keeps_fertilizer_alive(self):
+        engine = run(240)
+        final = engine.stats[-1]
+        self.assertGreater(final["fertilizer_used"], 0.0)
+        self.assertGreater(final["alive"], 1000)
+        self.assertAlmostEqual(final["money_total"], engine.money_initial, places=2)
+
     def test_same_seed_is_deterministic(self):
         a = run(12, seed=7).stats[-1]
         b = run(12, seed=7).stats[-1]

@@ -177,6 +177,11 @@ def should_invest(engine: "Engine", enterprise: "Enterprise") -> Optional[tuple[
         return None
     if enterprise.industry == Industry.AGRICULTURE and not enterprise.modernization_capable:
         return None
+    # 化肥厂是典型的高固定成本、低毛利行业。没有长期规划时，企业会把
+    # 现金不断砸进反应炉，最后没钱买煤。先限制单厂最多 2 台反应炉，
+    # 作为“保留周转资金”的临时规则；后续由 LLM 经理做长期规划。
+    if enterprise.industry == Industry.FERTILIZER_FACTORY and enterprise.total_equipment() >= 2:
+        return None
     workers = engine.enterprise_workers(enterprise)
     wage_bill = sum(w.wage * w.effective_labor for w in workers)
     reserve = max(wage_bill * 3.0, 100.0)

@@ -5,7 +5,7 @@
 
 长期目标是用 LLM 扮演经理和董事；当前里程碑是先把规则驱动的经济内核做扎实。
 
-> 状态：**V0.3.0 — 2^N 设备表版，HTML 发行版尚未实现。**
+> 状态：**V0.3.1 — 2^N 设备表版，HTML 发行版尚未实现。**
 > 引擎可运行、固定随机种子可复现，并有回归测试。LLM 智能体、合同、期货订单和完整界面
 > 是刻意推迟的内容。
 
@@ -36,6 +36,19 @@ $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
 
+## 可选的 LLM 经理探针
+
+默认仿真不访问网络。若要在本地验证“长期规划”经理，可先设置环境变量（不要把 token 写进仓库）：
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+$env:ANTHROPIC_AUTH_TOKEN = "<本地 token>"
+$env:ANTHROPIC_MODEL = "deepseek-v4-flash-vision-exp[1M]"
+python scripts/llm_probe.py --months 60 --industry fertilizer_factory
+```
+
+也可以使用 `--settings <本地 settings_DS.json>`；该文件和 API key 已加入 `.gitignore`，不要提交。
+
 ## V0.3 已实现
 
 - 240 个月度轮次；固定随机种子；货币总量守恒审计。
@@ -51,15 +64,20 @@ python -m unittest discover -s tests -v
 - 资本主义企业进入与投资：按预期资本回报率决策，并带建设期。
 - 土地市场与资本主义农业：土地稀缺且由自耕农持有；农场可以买地、雇工、购买化肥和农机。
   这是让农业劳动生产率不再冻结在糊口均衡的机制。
+- 化肥厂单厂最多 2 台反应炉（临时周转资金规则），避免“零化肥”死锁；240 个月回归仍在使用。
 - 银行工资周转贷；企业现金与所有者现金分离；分红；基于净资产的破产判断。
 - 指标：GDP、投资、失业率、全社会利润率、资本存量、农业劳动生产率、企业数量、
   生活标准分布。
 
 架构文档与代码保持一致：[[03_架构设计文档.md]]。
 
+## 六边形地块视图
+
+最终 HTML 发行版将使用 7 个六边形地块：中心是城市（纺织厂/施工队），周围是机械、钢铁、农业、矿场、化肥、砖厂。农业地块有河流、森林和金色网格农田；矿场是山地；空地块是草地和稀疏树木。当前已有单文件视觉原型 web/hex-map-preview.html，尚未接入仿真；见 [[web/README.md]] 和 [[03_架构设计文档.md]]。
+
 ## 尚未实现
 
-- LLM 经理/董事智能体与管理层级。
+- 完整 LLM 经理/董事智能体与管理层级；当前只有本地探针，未接入仿真。
 - 合同、期货/订单生产、跨月平滑采购。
 - HTML 发行版；当前入口是命令行。
 - 场景 0（铁器时代）和场景 2（晚期资本主义）。
@@ -85,11 +103,15 @@ python -m unittest discover -s tests -v
 ├─ 03_架构设计文档.md          # 由 Code Bot 维护，必须与代码一致
 ├─ 04_开发日志文档.md
 ├─ src/ecosim/                 # Python 参考实现
+├─ scripts/                    # 本地调试脚本（LLM 探针）
 ├─ tests/                      # 确定性回归测试
 ├─ docs/
 │  ├─ REQUIREMENTS_REVIEW.md   # 需求冲突 / 待选项
+│  ├─ LLM_LOCAL_SETUP.md       # 本地 LLM 调试与安全
 │  └─ decisions/               # 架构决策记录
-└─ web/                        # HTML 发行版（规划中）
+└─ web/
+   ├─ hex-map-preview.html     # 六边形地图视觉原型
+   └─ README.md                # HTML 发行版规划
 ```
 
 ## 开发流程
