@@ -25,6 +25,7 @@ class Worker:
     food: float = FOOD_PER_WORKER
     cloth: float = 1.0
     housing: float = 0.2
+    service: float = 0.0
     employer_id: Optional[str] = None
     wage: float = 0.0
     hours: int = 16
@@ -38,6 +39,7 @@ class Worker:
     consumed_food: float = 0.0
     consumed_cloth: float = 0.0
     consumed_housing: float = 0.0
+    consumed_service: float = 0.0
     living_standard: str = "survival"
 
     @property
@@ -105,6 +107,7 @@ class Enterprise:
     last_unmet: float = 0.0
     last_fill_rate: float = 1.0
     dormant_months: int = 0
+    service_idle_months: int = 0
     replacement_months: int = 0
 
     # 市场 / 会计状态
@@ -156,9 +159,11 @@ class Capitalist:
     food: float = 0.15
     cloth: float = 1.5
     housing: float = 0.3
+    service: float = 0.0
     consumed_food: float = 0.0
     consumed_cloth: float = 0.0
     consumed_housing: float = 0.0
+    consumed_service: float = 0.0
 
     def owned_count(self, enterprises: Dict[str, Enterprise]) -> int:
         return sum(1 for e in enterprises.values() if e.owner_id == self.id and e.active)

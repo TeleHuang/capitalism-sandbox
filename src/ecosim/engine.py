@@ -15,6 +15,7 @@ from .config import (
     CAPITALIST_CLOTH,
     CAPITALIST_HOUSING,
     CAPITALIST_MIN_CONSUMPTION,
+    CAPITALIST_SERVICE,
     CLOTH_PER_WORKER,
     COMFORT_MULTIPLIER,
     COMFORT_SAVINGS,
@@ -32,8 +33,13 @@ from .config import (
     MAX_ACTIVE_PROJECTS,
     MAX_NEW_FIRMS_PER_TICK,
     MAX_PROJECTS_PER_TICK,
+    MAX_SERVICE_ENTRIES_PER_MONTH,
     PROJECT_TIMEOUT_MONTHS,
     SECTOR_PARAMS,
+    SERVICE_ENTRY_MIN_REVENUE,
+    SERVICE_FIRM_RESERVE,
+    SERVICE_IDLE_EXIT_MONTHS,
+    SERVICE_PER_HOUSEHOLD,
     SKILL_GROWTH_PER_MONTH,
     SKILL_MAX,
     TOTAL_LAND_MU,
@@ -355,6 +361,11 @@ class Engine:
                 sold = enterprise.last_sales.get(out, 0.0)
                 enterprise.smoothed_sales = 0.7 * enterprise.smoothed_sales + 0.3 * sold
 
+        # 服务是流量而非库存：未售出的服务不能留到下月再卖。
+        for enterprise in self.enterprises.values():
+            if enterprise.active and enterprise.industry == Industry.SERVICE:
+                enterprise.inventory[Good.SERVICE] = 0.0
+
         self._progress_projects()
         self._finance()
         self._government_settlement()
@@ -574,6 +585,9 @@ class Engine:
                     if not hiring:
                         break
 
+        # 正规部门招聘结束后，失业者可用手工服务摊自雇。
+        # MMT 的就业保障仍是最后雇主，吸收服务业容纳不下的剩余失业。
+        self._service_self_employment(prices)
         if self.government is not None and self.government.job_guarantee:
             self._job_guarantee()
 
@@ -597,6 +611,68 @@ class Engine:
         worker.hours = worker.choose_hours(prices)
         if worker.id not in enterprise.workers:
             enterprise.workers.append(worker.id)
+
+    def _service_self_employment(self, prices: Dict[Good, float]) -> None:
+        """失业者以零资本的手工服务摊进入非正规部门。
+
+        只在服务市场存在超额需求时进入：上月有买盘、供给不足且仍有
+        未成交订单。这样既不会制造“没有销路的就业”，也能让服务业在
+        食品/衣物/住房都买不起的贫困家庭之外，按实际需求逐步吸收劳动力。
+        自雇者不受工资下限约束，经营所得由 ``_finance`` 直接转给摊主。
+        """
+        service_firms = self.active_enterprises(Industry.SERVICE)
+        params = SECTOR_PARAMS[Industry.SERVICE]
+        if len(service_firms) >= params.max_firms:
+            return
+        history = self.market.history[Good.SERVICE]
+        demand = history.get("demand", 0.0)
+        supply = history.get("supply", 0.0)
+        unmet = history.get("unmet", 0.0)
+        if demand <= 1e-9 or supply + 1e-9 >= demand or unmet <= 0.25:
+            return
+        price = prices.get(Good.SERVICE, 0.0)
+        capacity = EQUIPMENT["service_t0"].capacity
+        if price * capacity < SERVICE_ENTRY_MIN_REVENUE:
+            return
+
+        candidates = [
+            worker
+            for worker in self.workers.values()
+            if worker.alive
+            and not worker.employed
+            and not worker.is_owner_operator
+        ]
+        # 优先让最贫困的失业者自雇；他们边际上最需要现金收入。
+        candidates.sort(key=lambda worker: (worker.cash, worker.id))
+        target = min(
+            MAX_SERVICE_ENTRIES_PER_MONTH,
+            max(1, int(math.ceil(unmet / max(capacity, 1e-9)))),
+        )
+        created = 0
+        for worker in candidates:
+            if created >= target or len(service_firms) >= params.max_firms:
+                break
+            enterprise = self.create_enterprise(
+                Industry.SERVICE,
+                owner_id=worker.id,
+                cash=0.0,
+                is_household=True,
+                modernization_capable=False,
+            )
+            enterprise.add_equipment("service_t0", 1)
+            enterprise.demand_forecast = capacity
+            # 服务不可储存：不设库存目标，当月未售出部分月末作废。
+            enterprise.target_inventory_months = 0.0
+            # 跨行业进入的熟练度折减，与原 _hire 的规则一致。
+            worker.skill = max(1.0, worker.skill * 0.75)
+            worker.industry = Industry.SERVICE
+            worker.employer_id = enterprise.id
+            worker.wage = 0.0
+            worker.hours = worker.choose_hours(prices)
+            worker.is_owner_operator = True
+            enterprise.workers.append(worker.id)
+            service_firms.append(enterprise)
+            created += 1
 
     # ------------------------------------------------------------------
     # 工资 / 生产
@@ -1176,6 +1252,14 @@ class Engine:
             self.market.submit_buy(worker, good, quantity, bid)
             cash_left -= quantity * bid
 
+        # 服务是温饱之后的可选消费，放在最后用剩余预算。
+        service_gap = max(0.0, SERVICE_PER_HOUSEHOLD - worker.service)
+        if service_gap > 1e-9 and cash_left > 0:
+            bid = prices.get(Good.SERVICE, 10.0) * 1.02
+            quantity = min(service_gap, cash_left / max(bid, 1e-9))
+            if quantity > 1e-9:
+                self.market.submit_buy(worker, Good.SERVICE, quantity, bid)
+
     def _submit_household_orders(self) -> None:
         prices = self.market.reference_prices
         for worker in self.workers.values():
@@ -1230,6 +1314,18 @@ class Engine:
                 if qty > 1e-9:
                     self.market.submit_buy(worker, Good.BUILDING, qty, bid)
 
+            # 服务排在最后；先为住房预留预算，避免服务挤占温饱。
+            service_gap = max(0.0, SERVICE_PER_HOUSEHOLD * mult - worker.service)
+            if service_gap > 1e-9 and cash_left > 0:
+                bid = prices.get(Good.SERVICE, 10.0) * 1.02
+                housing_reserve = (
+                    HOUSING_PER_WORKER * mult * prices.get(Good.BUILDING, 0.0)
+                )
+                budget = max(0.0, cash_left - housing_reserve)
+                qty = min(service_gap, budget / max(bid, 1e-9))
+                if qty > 1e-9:
+                    self.market.submit_buy(worker, Good.SERVICE, qty, bid)
+
         for capitalist in self.capitalists.values():
             budget = max(
                 CAPITALIST_MIN_CONSUMPTION,
@@ -1261,6 +1357,17 @@ class Engine:
                 if qty > 1e-9:
                     self.market.submit_buy(capitalist, Good.BUILDING, qty, bid)
 
+            service_gap = max(0.0, CAPITALIST_SERVICE - capitalist.service)
+            if service_gap > 1e-9 and cash_left > 0:
+                bid = prices.get(Good.SERVICE, 10.0) * 1.02
+                housing_reserve = CAPITALIST_HOUSING * prices.get(
+                    Good.BUILDING, 0.0
+                )
+                budget = max(0.0, cash_left - housing_reserve)
+                qty = min(service_gap, budget / max(bid, 1e-9))
+                if qty > 1e-9:
+                    self.market.submit_buy(capitalist, Good.SERVICE, qty, bid)
+
     def _submit_input_orders(self) -> None:
         prices = self.market.reference_prices
         for enterprise in self.active_enterprises():
@@ -1283,6 +1390,18 @@ class Engine:
                     )
                     owner.cash -= injection
                     enterprise.cash += injection
+            input_total = sum(
+                qty * prices.get(good, 0.0) * 1.06
+                for good, qty in needs.items()
+            )
+            input_reserve = input_total * 0.5
+            # 营运资本贷款：只有工资能借、投入品不能借，会在
+            # “建筑没钱买砖、砖厂没销路”之间形成流动性死锁。
+            shortfall = max(
+                0.0, wage_bill * 2.0 + input_reserve - enterprise.cash
+            )
+            if shortfall > 1e-9:
+                self.bank.lend(enterprise, shortfall)
             available = max(0.0, enterprise.cash - wage_bill * 2.0)
             if available <= 1e-9:
                 continue
@@ -1433,6 +1552,21 @@ class Engine:
                 - depreciation
             )
 
+            if enterprise.is_household and enterprise.industry == Industry.SERVICE:
+                # 自雇摊主不是雇员：当月经营现金在扣除少量周转金后
+                # 直接成为家庭收入，不经过工资下限，也不形成资本回报。
+                owner = self.workers.get(enterprise.owner_id)
+                if owner is not None and owner.alive:
+                    payout = max(0.0, enterprise.cash - SERVICE_FIRM_RESERVE)
+                    if payout > 0:
+                        enterprise.cash -= payout
+                        owner.cash += payout
+                        enterprise.last_profit -= payout
+                if enterprise.month_revenue <= 1e-9:
+                    enterprise.service_idle_months += 1
+                else:
+                    enterprise.service_idle_months = 0
+
             if (
                 enterprise.last_profit > 0
                 and enterprise.cash > wage_bill * 3.0 + 100.0
@@ -1471,6 +1605,18 @@ class Engine:
                 worker.employer_id = None
                 worker.wage = 0.0
         enterprise.workers.clear()
+        # 家庭农场/服务摊破产时，所有者必须回到劳动市场；否则
+        # is_owner_operator 会把他永久排除在雇佣、自雇和就业保障之外。
+        owner_worker = self.workers.get(enterprise.owner_id)
+        if owner_worker is not None:
+            owner_worker.is_owner_operator = False
+            owned_mu = self.land.owners.pop(owner_worker.id, 0.0)
+            owner_worker.land_owned = 0.0
+            self.land.enterprise_by_owner.pop(owner_worker.id, None)
+            # 家庭农场土地通常已记录在 enterprise.land 中；只有
+            # land.owners 多出来的部分才补进待售土地，避免重复计算。
+            if owned_mu > enterprise.land:
+                self.land.estate_land += owned_mu - enterprise.land
         # 现金归银行；库存/设备/土地进资产池，不能凭空消失。
         if enterprise.cash > 0:
             self.bank.cash += enterprise.cash
@@ -1493,10 +1639,51 @@ class Engine:
         self.bank.write_offs += loan
         enterprise.debt = 0.0
 
+    def _exit_service_firm(self, enterprise: Enterprise) -> None:
+        """自雇服务摊退出：摊主回到失业池，资产回收到资产池。
+
+        服务摊没有资本品，但设备/库存仍按“不能凭空消失”的规则处理。
+        """
+        enterprise.active = False
+        for worker_id in list(enterprise.workers):
+            worker = self.workers.get(worker_id)
+            if worker is not None:
+                worker.employer_id = None
+                worker.wage = 0.0
+                worker.is_owner_operator = False
+        enterprise.workers.clear()
+        owner = self.workers.get(enterprise.owner_id)
+        if enterprise.cash > 0:
+            if owner is not None and owner.alive:
+                owner.cash += enterprise.cash
+            else:
+                self.bank.cash += enterprise.cash
+            enterprise.cash = 0.0
+        for good, qty in enterprise.inventory.items():
+            if qty > 0:
+                self.asset_pool.inventory[good] += qty
+        for key, count in enterprise.equipment.items():
+            if count > 0:
+                self.asset_pool.equipment[key] = (
+                    self.asset_pool.equipment.get(key, 0) + count
+                )
+        enterprise.inventory = {g: 0.0 for g in Good}
+        enterprise.equipment = {}
+        enterprise.service_idle_months = 0
+
     def _cleanup_dormant(self) -> None:
         """清理无设备、无工人、无库存的壳企业，释放 max_firms 槽位。"""
         for enterprise in self.enterprises.values():
             if not enterprise.active:
+                continue
+            # 长期卖不出去的自雇服务摊主动退出，避免把失业者
+            # 伪装成“就业”。设备与库存进入资产池。
+            if (
+                enterprise.industry == Industry.SERVICE
+                and enterprise.is_household
+                and enterprise.service_idle_months >= SERVICE_IDLE_EXIT_MONTHS
+            ):
+                self._exit_service_firm(enterprise)
                 continue
             has_assets = (
                 bool(enterprise.equipment)
@@ -1579,6 +1766,9 @@ class Engine:
             worker.cloth -= worker.consumed_cloth
             worker.consumed_housing = min(worker.housing, housing_target)
             worker.housing -= worker.consumed_housing
+            service_target = SERVICE_PER_HOUSEHOLD * mult
+            worker.consumed_service = min(worker.service, service_target)
+            worker.service -= worker.consumed_service
 
             if worker.consumed_food + 1e-9 < FOOD_PER_WORKER:
                 worker.hunger_months += 1
@@ -1633,6 +1823,10 @@ class Engine:
             capitalist.cloth -= capitalist.consumed_cloth
             capitalist.consumed_housing = min(capitalist.housing, CAPITALIST_HOUSING)
             capitalist.housing -= capitalist.consumed_housing
+            capitalist.consumed_service = min(
+                capitalist.service, CAPITALIST_SERVICE
+            )
+            capitalist.service -= capitalist.consumed_service
 
     # ------------------------------------------------------------------
     # 统计指标

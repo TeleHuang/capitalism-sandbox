@@ -217,6 +217,8 @@ class Market:
                 agent.cloth += quantity
             elif good == Good.BUILDING:
                 agent.housing += quantity
+            elif good == Good.SERVICE:
+                agent.service += quantity
             return
         if isinstance(agent, Government):
             agent.inventory[good] = agent.inventory.get(good, 0.0) + quantity

@@ -13,6 +13,7 @@ class Good(str, Enum):
     FERTILIZER = "fertilizer"
     MACHINERY = "machinery"
     BUILDING = "building"
+    SERVICE = "service"
 
 
 class Industry(str, Enum):
@@ -25,9 +26,12 @@ class Industry(str, Enum):
     MACHINERY_FACTORY = "machinery_factory"
     CONSTRUCTION = "construction"
     FERTILIZER_FACTORY = "fertilizer_factory"
+    SERVICE = "service"
 
 
-CONSUMER_GOODS = frozenset({Good.FOOD, Good.CLOTH, Good.BUILDING})
+CONSUMER_GOODS = frozenset(
+    {Good.FOOD, Good.CLOTH, Good.BUILDING, Good.SERVICE}
+)
 CAPITAL_GOODS = frozenset({Good.MACHINERY, Good.BRICK, Good.STEEL})
 
 GOOD_LABELS = {
@@ -40,4 +44,5 @@ GOOD_LABELS = {
     Good.FERTILIZER: "化肥",
     Good.MACHINERY: "机械",
     Good.BUILDING: "建筑",
+    Good.SERVICE: "服务",
 }

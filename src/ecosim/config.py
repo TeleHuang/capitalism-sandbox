@@ -26,12 +26,18 @@ INITIAL_PRICES: Dict[Good, float] = {
     Good.FERTILIZER: 50.0,
     Good.MACHINERY: 200.0,
     Good.BUILDING: 10.0,
+    Good.SERVICE: 10.0,
 }
 
 # 月度温饱篮子（PRD 2.2.1）。
 FOOD_PER_WORKER = 0.10          # 吨 / 月
 CLOTH_PER_WORKER = 1.0          # 件 / 月
 HOUSING_PER_WORKER = 0.20       # 平方米 / 月
+
+# 服务业/非正规部门：每户每月的服务消费量。服务是温饱之后的
+# 可选消费，家庭在食品/衣物/住房之后用剩余现金购买。
+SERVICE_PER_HOUSEHOLD = 0.5     # 单位 / 月
+CAPITALIST_SERVICE = 0.75       # 资产阶级按 1.5 倍工人标准消费
 
 COMFORT_MULTIPLIER = 1.5
 COMFORT_SAVINGS = 60.0
@@ -74,6 +80,12 @@ MAX_ACTIVE_PROJECTS = 10
 PROJECT_TIMEOUT_MONTHS = 18
 DEPRECIATION_MONTHS = 120.0
 DIVIDEND_PAYOUT = 0.50
+
+# 服务业自雇：需求未满足时，失业者用零资本的手工服务摊进入。
+MAX_SERVICE_ENTRIES_PER_MONTH = 25
+SERVICE_ENTRY_MIN_REVENUE = 5.0      # 每单位服务收入低于此值则不再进入
+SERVICE_FIRM_RESERVE = 2.0           # 自雇家庭保留的周转现金
+SERVICE_IDLE_EXIT_MONTHS = 6         # 连续无销售额月数，退回失业/资产池
 
 # 土地市场
 TOTAL_LAND_MU = 6000.0
@@ -222,6 +234,22 @@ MANUAL_EQUIPMENT: Dict[Industry, str] = {
     Industry.TEXTILE_MILL: "textile_manual",
 }
 
+# 手工服务摊：零资本品、当月可开工。一个摊主即一家服务企业，
+# 是失业者自雇/非正规部门的主要载体。刻意不提供 2^N 升级档，
+# 避免服务业变成资本密集型部门。
+EQUIPMENT["service_t0"] = EquipmentType(
+    key="service_t0",
+    label="手工服务摊",
+    industry=Industry.SERVICE,
+    capacity=1.0,
+    workers=1,
+    capital_good=None,
+    capital_cost=0.0,
+    build_months=0,
+    power=0.0,
+    building_cost=0.0,
+)
+
 
 SECTOR_PARAMS: Dict[Industry, SectorParams] = {
     Industry.AGRICULTURE: SectorParams(
@@ -289,6 +317,13 @@ SECTOR_PARAMS: Dict[Industry, SectorParams] = {
         inputs={Good.COAL: 2.0},
         equipment=tuple(f"fertilizer_t{n}" for n in range(8)),
         max_firms=3,
+    ),
+    Industry.SERVICE: SectorParams(
+        industry=Industry.SERVICE,
+        output=Good.SERVICE,
+        inputs={},
+        equipment=("service_t0",),
+        max_firms=600,
     ),
 }
 
