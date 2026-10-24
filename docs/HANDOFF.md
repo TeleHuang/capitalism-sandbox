@@ -8,7 +8,7 @@
 ## 当前基线
 
 - 分支：`v0.4-integration`
-- 最新提交：`ac48286` 之后（服务业 + 验证套件 + 化肥修复 + 软 markup + 驾驶舱）
+- 最新提交：`93205ff`（服务业 + 验证套件 + 化肥修复 + 软 markup + 驾驶舱 + 信贷诊断）
 - Python 版本：0.4.0
 - 测试：65 个全绿（33 原有 + 10 不变量 + 7 服务业 + 5 化肥 + 10 软 markup）
 - UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
