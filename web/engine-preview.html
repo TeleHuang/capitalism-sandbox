@@ -1,0 +1,4084 @@
+<!DOCTYPE html>
+<!--
+  EcoSim V0.3.2 · 单文件离线引擎预览
+  本文件把 src/ecosim 的当前 Python 引擎忠实移植为浏览器 JavaScript，UI 复用 web/ui-preview.html 的布局，
+  所有数字来自同一份逐月仿真快照。没有 CDN、外部图片、字体、网络请求或构建依赖。
+
+  已保留的缺陷（未修复）：
+  1. production_plan() 只影响 input_needs()；produce() 不按计划缩放产出。工业因此反复停摆并长期零产出。
+  2. 农业投资项目使用 priority=True 绕过 MAX_ACTIVE_PROJECTS；默认 seed=1 时 T240 有 18 个 agriculture 项目占满名额。
+  3. _finance() 的折旧使用 capital_value()，包含土地价值，与文档“土地不计折旧”不一致。
+  4. 农场化肥采购通过投入品市场发生，但不计入 month_input_cost；农业 inputs 为空，market.match 不会累加该成本。
+  5. MAX_NEW_FIRMS_PER_TICK 常量存在但未参与进入数量控制（代码路径本身每月最多选一个新企业）。
+  6. 土地市场无需求时地价固定下跌 2%；现有农场扩张检查“企业现金 + 所有者现金”，实际付款只扣所有者现金。
+  7. 项目完成后只退回剩余现金，未退回项目的 inventory 资本品；只有取消项目才退回库存。
+  8. 企业收入/利润不含库存变动；GDP 只含居民消费与项目资本品采购，不含企业中间投入。
+  9. produce() 不读取生产计划，导致生产、采购、平滑销量之间的反馈错位；项目可长期采购不到机械而卡住。
+  10. 房屋只作为月度流量消费，没有住房存量、资产或入住率；界面显示的是住房需求满足率。
+  11. 投资项目的最大活跃数限制只对非农业项目生效，且农业项目仍保留两个每月启动槽位。
+  12. 市场参考价含成本安全轨（价格上下限），并非竞争均衡；企业投入采购按买入金额立即计入成本。
+
+  随机性说明：
+  Python 只用 random.Random(seed) 做饥饿死亡判定。本移植没有使用 mulberry32，而是实现了 CPython 的
+  MT19937 init_by_array 与 genrand_res53 输出组合，种子 0..2147483647 时死亡随机流与 Python 逐位一致，
+  因此 240 月运行也可以按同一死亡序列复现。除该随机流外，所有排序、迭代和浮点运算顺序均按 Python 代码移植。
+
+  数据口径：
+  - 页面开始界面可选 60/120/240 月与种子；运行结束后默认停在末月，拖动时间轴查看任意月份。
+  - 六边形地图、六卡、诊断区都读取同一月份快照。
+
+  运行模式：
+  - 快速模式（默认）：同一个 JavaScript 引擎批量同步执行全部 tick，期间不做 DOM 渲染，结束后一次性渲染，并显示总耗时与毫秒/tick。
+  - 游玩模式：同一个引擎按可调间隔（200/300/500 毫秒/tick）逐 tick 执行并刷新卡片、地图、诊断，带进度条和暂停/继续。
+  - 两种模式共用完全相同的 Engine、场景初始化和 seed；模式只影响调度与渲染，不改变任何经济结果。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>资本主义经济模拟 · 引擎预览（V0.3.2）</title>
+  <style>
+    :root {
+      --ink: #24342b;
+      --muted: #657568;
+      --paper: #f4eedf;
+      --panel: rgba(255, 252, 243, 0.92);
+      --line: #c9bea7;
+      --grass: #8fbf72;
+      --field: #d9b44a;
+      --river: #6eb7d6;
+      --mountain: #8d8a86;
+      --mountain-dark: #68645f;
+      --steel: #6c7f91;
+      --machinery: #d58a3a;
+      --brick: #b65a45;
+      --fertilizer: #4d9a86;
+      --textile: #8b6aa8;
+      --construction: #c99a42;
+      --housing: #7f9bb5;
+      --green: #2f8f4e;
+      --red: #c0392b;
+      --amber: #a76b12;
+      --blue: #456b8a;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; overflow-x: hidden; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 8%, #fff9e8 0, transparent 36%),
+        radial-gradient(circle at 88% 90%, #e7ddc2 0, transparent 42%),
+        var(--paper);
+      font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+    button, input { font: inherit; color: inherit; }
+    button { touch-action: manipulation; }
+    .hidden { display: none !important; }
+
+    /* ---------- 异常提示 ---------- */
+    .error-banner {
+      position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+      z-index: 300; width: min(760px, calc(100vw - 28px));
+      padding: 13px 16px; border: 1px solid #b23a2c; border-radius: 12px;
+      background: #fff1ed; color: #7e2016; box-shadow: 0 12px 34px rgba(80, 20, 10, 0.22);
+      font-size: 13px; line-height: 1.55;
+    }
+    .error-banner strong { display: block; margin-bottom: 2px; }
+    .error-banner .error-text { word-break: break-word; }
+    .error-banner .error-close {
+      position: absolute; top: 8px; right: 10px; border: 0; background: transparent;
+      color: #8b3a2f; font-size: 20px; cursor: pointer;
+    }
+
+    /* ---------- 开始界面 ---------- */
+    .screen {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px; overflow-y: auto;
+      background:
+        radial-gradient(circle at 18% 20%, rgba(255,255,255,0.75), transparent 32%),
+        radial-gradient(circle at 80% 80%, rgba(208,193,157,0.5), transparent 40%),
+        rgba(244, 238, 223, 0.97);
+    }
+    .start-card {
+      width: min(760px, 100%);
+      padding: 34px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255, 252, 245, 0.97);
+      box-shadow: 0 24px 70px rgba(69, 60, 41, 0.16);
+    }
+    .eyebrow {
+      color: var(--green); font-size: 12px; font-weight: 800;
+      letter-spacing: 0.12em; text-transform: uppercase;
+    }
+    h1 { margin: 8px 0 8px; font-size: clamp(30px, 5vw, 48px); letter-spacing: -0.03em; }
+    .lead { margin: 0 0 22px; color: var(--muted); line-height: 1.7; }
+    .start-section { margin-top: 20px; }
+    .start-section h2 { margin: 0 0 9px; font-size: 15px; }
+    .scenario-grid { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 10px; }
+    .scenario {
+      padding: 15px; border: 1px solid var(--line); border-radius: 14px;
+      background: #fbf6e9; text-align: left; cursor: pointer; min-width: 0; overflow: hidden;
+    }
+    .scenario.active { border-color: var(--green); box-shadow: 0 0 0 3px rgba(47,143,78,0.12); }
+    .scenario:disabled { opacity: 0.48; cursor: not-allowed; }
+    .scenario strong { display: block; margin-bottom: 4px; }
+    .scenario small { color: var(--muted); line-height: 1.55; }
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .mode-option {
+      padding: 14px 15px; border: 1px solid var(--line); border-radius: 14px;
+      background: #fbf6e9; text-align: left; cursor: pointer; min-width: 0;
+    }
+    .mode-option.active { border-color: var(--green); box-shadow: 0 0 0 3px rgba(47,143,78,0.12); background: #f3f9ec; }
+    .mode-option strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    .mode-option small { color: var(--muted); line-height: 1.55; }
+    .play-options {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      margin-top: 9px; padding: 9px 12px; border-radius: 10px;
+      background: #f5efe1; color: var(--muted); font-size: 11.5px;
+    }
+    .play-options select, .play-speed-label select {
+      padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px;
+      background: #fffdf8; color: var(--ink); font-size: 11px;
+    }
+    .duration { display: flex; flex-wrap: wrap; gap: 8px; }
+    .duration button {
+      padding: 9px 15px; border: 1px solid var(--line); border-radius: 999px;
+      background: #fbf6e9; cursor: pointer;
+    }
+    .duration button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .seed-line {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px;
+      background: #fbf6e9;
+    }
+    .seed-line label { font-weight: 700; font-size: 13px; }
+    .seed-line input {
+      width: 180px; padding: 8px 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: #fffdf8; outline: none;
+    }
+    .seed-line input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(47,143,78,.12); }
+    .seed-line small { color: var(--muted); font-size: 12px; }
+    .start-error { min-height: 18px; margin: 12px 0 0; color: var(--red); font-size: 13px; }
+    .primary {
+      width: 100%; margin-top: 16px; padding: 14px 18px; border: 0; border-radius: 14px;
+      background: var(--green); color: #fff; font-weight: 800; font-size: 16px;
+      cursor: pointer; box-shadow: 0 8px 20px rgba(47,143,78,0.22);
+    }
+    .primary:hover { filter: brightness(1.06); }
+    .primary:disabled { opacity: 0.65; cursor: wait; filter: none; }
+    .fine { margin: 13px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .defect-list { margin: 8px 0 0; padding-left: 20px; color: #705d3f; font-size: 12px; line-height: 1.7; }
+    .defect-list li { margin: 2px 0; }
+
+    /* ---------- 主界面 ---------- */
+    .app { max-width: 1480px; margin: 0 auto; padding: 14px 18px 34px; overflow-x: hidden; }
+    .topbar {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 14px; padding: 2px 2px 12px;
+    }
+    .brand h1 { margin: 0; font-size: clamp(20px, 2.4vw, 30px); }
+    .brand p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+    .status-pill {
+      display: inline-block; margin-left: 4px; padding: 2px 8px; border-radius: 999px;
+      background: #e6f2e9; color: #316d45; font-size: 11px; font-weight: 700;
+    }
+    .top-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .ghost {
+      padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+      background: rgba(255,252,243,0.7); cursor: pointer; font-size: 12px;
+    }
+    .ghost:hover { background: #fffaf0; }
+    .ghost:disabled { opacity: .5; cursor: default; }
+
+    /* ---------- 全期汇总 / 时间轴 ---------- */
+    .run-toolbar {
+      display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(390px, 0.65fr);
+      gap: 12px; margin-bottom: 14px; align-items: stretch;
+    }
+    .summary-strip {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+      padding: 10px; border: 1px solid var(--line); border-radius: 16px;
+      background: rgba(255, 252, 243, 0.78);
+    }
+    .summary-card {
+      padding: 7px 10px; border-radius: 11px; background: #f8f2e5;
+      min-width: 0;
+    }
+    .summary-label { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+    .summary-main { margin-top: 2px; font-size: clamp(17px, 1.8vw, 23px); font-weight: 850; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .summary-sub { margin-top: 3px; color: #637064; font-size: 10px; line-height: 1.45; }
+    .timeline-panel {
+      display: flex; flex-direction: column; justify-content: center; gap: 8px;
+      padding: 12px 14px; border: 1px solid var(--line); border-radius: 16px;
+      background: rgba(255, 252, 243, 0.9);
+    }
+    .timeline-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .timeline-title { font-size: 12px; font-weight: 800; }
+    .timeline-label { color: var(--green); font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .timeline-controls { display: flex; align-items: center; gap: 8px; }
+    .timeline-controls button {
+      border: 1px solid var(--line); border-radius: 8px; background: #fbf6e9;
+      padding: 5px 8px; font-size: 11px; cursor: pointer; white-space: nowrap;
+    }
+    .timeline-controls button:disabled { opacity: .4; cursor: default; }
+    #month-slider { width: 100%; accent-color: var(--green); cursor: pointer; }
+    #month-slider:disabled { opacity: .55; cursor: default; }
+    .timeline-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    #timeline-runtime { color: #465549; font-weight: 700; white-space: normal; }
+    .play-controls { display: flex; flex-direction: column; gap: 5px; }
+    .progress-track {
+      height: 6px; border-radius: 999px; background: #e3d9c5; overflow: hidden;
+    }
+    .progress-fill { height: 100%; width: 0%; background: var(--green); transition: width 120ms linear; }
+    .play-control-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; }
+    .progress-text { color: var(--muted); font-size: 10.5px; }
+    .play-speed-label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10.5px; }
+    #play-toggle { padding: 4px 9px; font-size: 10.5px; }
+    .summary-placeholder {
+      grid-column: 1 / -1; padding: 8px 10px; border-radius: 11px;
+      background: #f8f2e5; color: var(--muted); font-size: 11px; line-height: 1.55;
+    }
+    .summary-placeholder strong { color: var(--ink); }
+
+    /* ---------- 总览 ---------- */
+    .overview {
+      display: grid;
+      grid-template-columns: minmax(240px, 292px) minmax(0, 1fr) minmax(240px, 292px);
+      gap: 16px; align-items: start;
+    }
+    .side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .card {
+      width: 100%; padding: 15px; border: 1px solid var(--line); border-radius: 16px;
+      background: var(--panel); box-shadow: 0 8px 24px rgba(69, 60, 41, 0.06);
+      text-align: left; cursor: pointer; min-width: 0; overflow: hidden;
+      transition: transform 140ms ease, box-shadow 140ms ease;
+    }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(69, 60, 41, 0.12); }
+    .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .card-title { font-size: 13px; font-weight: 800; color: #3b513f; }
+    .card-arrow { color: #8b9a8c; font-size: 15px; }
+    .card-value { margin-top: 7px; font-size: clamp(23px, 2.1vw, 29px); font-weight: 850; letter-spacing: -0.04em; overflow-wrap: anywhere; }
+    .card-sub { color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .card-rows { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 9px; color: #4f6153; font-size: 11.5px; }
+    .card-rows span { white-space: nowrap; }
+    @media (max-width: 640px) { .card-rows span { white-space: normal; } }
+    .spark { width: 100%; height: 32px; margin-top: 7px; display: block; overflow: visible; }
+    .spark circle { stroke: #fff; stroke-width: 1.5; }
+
+    /* ---------- 地图 ---------- */
+    .map-panel { min-width: 0; padding: 0; }
+    .map-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 2px 8px 0; }
+    .map-head strong { font-size: 13px; }
+    .map-caption { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; }
+    .map-hint { color: #7e8a7f; font-size: 10px; white-space: nowrap; }
+    #map { width: 100%; height: auto; display: block; filter: drop-shadow(0 14px 28px rgba(60,54,38,0.14)); }
+    .map-legend {
+      display: flex; flex-wrap: wrap; justify-content: center; gap: 7px 13px;
+      margin-top: -2px; color: var(--muted); font-size: 10.5px;
+    }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .legend-scale { color: #22a34f; font-weight: 900; }
+    .legend-count { color: var(--red); font-weight: 900; }
+    .map-footnote { margin: 7px 8px 0; color: #7b857b; font-size: 10px; line-height: 1.5; text-align: center; }
+    .hex { stroke: #5f7a57; stroke-width: 3; }
+    .tile-label {
+      font-size: 22px; font-weight: 800; fill: #2c402f;
+      paint-order: stroke; stroke: rgba(255,255,255,0.72); stroke-width: 5px; pointer-events: none;
+    }
+    .entity { cursor: pointer; }
+    .entity:hover { filter: brightness(1.08); }
+    .scale-badge {
+      font-size: 19px; font-weight: 800; fill: #22c55e;
+      stroke: #fff; stroke-width: 5px; paint-order: stroke; pointer-events: none;
+    }
+    .count-badge { fill: var(--red); stroke: #fff; stroke-width: 2.5; }
+    .count-text { fill: #fff; font-size: 15px; font-weight: 800; text-anchor: middle; pointer-events: none; }
+    .entity-label {
+      font-size: 13px; font-weight: 700; fill: #223426; text-anchor: middle;
+      paint-order: stroke; stroke: rgba(255,255,255,0.8); stroke-width: 4px; pointer-events: none;
+    }
+    .small-note {
+      font-size: 10px; fill: #3f5142; text-anchor: middle;
+      paint-order: stroke; stroke: rgba(255,255,255,0.84); stroke-width: 4px; pointer-events: none;
+    }
+    .empty-note {
+      font-size: 11px; fill: #7f4a3c; text-anchor: middle;
+      paint-order: stroke; stroke: rgba(255,255,255,0.8); stroke-width: 4px; pointer-events: none;
+    }
+    #tooltip {
+      position: fixed; z-index: 80; max-width: 310px; padding: 10px 12px;
+      border: 1px solid #b8ae95; border-radius: 10px;
+      background: rgba(255,252,243,0.98); box-shadow: 0 8px 24px rgba(50,45,32,0.2);
+      font-size: 12.5px; line-height: 1.6; pointer-events: none; opacity: 0;
+      transform: translate(-50%, -110%); transition: opacity 120ms ease;
+    }
+    #tooltip.show { opacity: 1; }
+    #tooltip strong { color: #2e4a34; }
+
+    /* ---------- 诊断 ---------- */
+    .diagnostic-wrap { margin-top: 22px; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 0 2px 9px; }
+    .section-head h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+    .section-head p { margin: 0; color: var(--muted); font-size: 11.5px; }
+    .diagnostic-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr); gap: 12px; align-items: start; }
+    .diag-panel {
+      padding: 15px; border: 1px solid var(--line); border-radius: 16px;
+      background: rgba(255, 252, 243, 0.9); box-shadow: 0 8px 24px rgba(69, 60, 41, 0.05);
+      min-width: 0;
+    }
+    .diag-panel h3 { margin: 0 0 8px; font-size: 14px; }
+    .diag-note { margin: 9px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.55; }
+    .diag-scroll { overflow-x: auto; }
+    .diag-table { width: 100%; border-collapse: collapse; font-size: 11.5px; min-width: 490px; }
+    .diag-table th, .diag-table td { padding: 6px 7px; border-bottom: 1px solid #e5dccb; text-align: left; white-space: nowrap; }
+    .diag-table th { color: var(--muted); font-size: 10.5px; font-weight: 700; }
+    .diag-table td:last-child, .diag-table th:last-child { text-align: right; }
+    .bad { color: var(--red); font-weight: 800; }
+    .ok { color: var(--green); font-weight: 700; }
+    .diag-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .diag-metric { padding: 8px 9px; border-radius: 9px; background: #f5efe2; min-width: 0; }
+    .diag-metric b { display: block; font-size: 15px; margin-bottom: 1px; overflow-wrap: anywhere; }
+    .diag-metric span { color: var(--muted); font-size: 10px; }
+    .project-box { margin-top: 10px; padding: 9px 10px; border-radius: 10px; background: #f2ecdd; }
+    .project-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+    .project-head strong { font-size: 12px; }
+    .project-big { color: var(--red); font-size: 21px; font-weight: 850; }
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .chip { padding: 3px 7px; border-radius: 999px; background: #e7dfcd; font-size: 10.5px; white-space: nowrap; }
+    .chip.alert { background: #f6d8d2; color: #882917; font-weight: 800; }
+    .warning-list { margin: 10px 0 0; padding: 9px 10px 9px 25px; border-radius: 10px; background: #fff6e5; color: #76561d; font-size: 10.5px; line-height: 1.55; max-height: 112px; overflow: auto; }
+    .warning-list li { margin: 2px 0; }
+    .quiet { color: var(--muted); font-size: 10.5px; }
+
+    /* ---------- 领域详情 ---------- */
+    .detail {
+      position: fixed; inset: 0; z-index: 60;
+      display: flex; align-items: center; justify-content: center;
+      padding: 22px; background: rgba(35, 45, 38, 0.38);
+      backdrop-filter: blur(3px);
+    }
+    .detail-panel {
+      width: min(900px, 100%); max-height: 90vh; overflow: auto;
+      padding: 24px; border: 1px solid var(--line); border-radius: 20px;
+      background: #fffcf5; box-shadow: 0 24px 70px rgba(40,36,26,0.25);
+    }
+    .detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .detail-head h2 { margin: 0; font-size: 24px; }
+    .detail-head p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .close-detail { border: 0; background: transparent; font-size: 28px; line-height: 1; cursor: pointer; color: #6d7a6f; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+    .kpi { padding: 11px; border-radius: 12px; background: #f5efe1; min-width: 0; }
+    .kpi b { display: block; font-size: 17px; margin-bottom: 3px; overflow-wrap: anywhere; }
+    .kpi span { color: var(--muted); font-size: 10.5px; }
+    .detail-chart { width: 100%; height: 190px; display: block; margin: 6px 0 16px; }
+    .chart-grid-line { stroke: #e4dac7; stroke-width: 1; }
+    .chart-axis-text { fill: #7c887b; font-size: 10px; }
+    .chart-value-text { fill: #526153; font-size: 10px; font-weight: 700; }
+    .detail-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .detail-table th, .detail-table td { padding: 8px 8px; border-bottom: 1px solid #e5dccb; text-align: left; vertical-align: top; }
+    .detail-table th { color: var(--muted); font-weight: 700; }
+    .detail-table td:last-child { text-align: right; }
+    .detail-table td:first-child { width: 42%; color: #465549; }
+    .detail-note { margin: 12px 0 0; padding: 9px 11px; border-radius: 9px; background: #f5efe1; color: #6b624e; font-size: 11px; line-height: 1.6; }
+
+    /* ---------- 响应式 ---------- */
+    @media (max-width: 1150px) {
+      .run-toolbar { grid-template-columns: 1fr; }
+      .overview { grid-template-columns: 1fr; }
+      .side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .side.left { order: 1; }
+      .map-panel { order: 2; }
+      .side.right { order: 3; }
+      .map-panel { padding: 0; }
+      .diagnostic-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .app { width: 100%; max-width: 100%; padding: 10px 10px 24px; }
+      .mode-grid { grid-template-columns: 1fr; }
+      .summary-strip { grid-template-columns: 1fr; }
+      .summary-card { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 3px 10px; }
+      .summary-sub { grid-column: 1 / -1; }
+      .scenario-grid { grid-template-columns: 1fr; }
+      .start-card { padding: 23px 19px; border-radius: 18px; }
+      .topbar { align-items: flex-start; }
+      .brand h1 { font-size: 20px; }
+      .brand p { font-size: 10.5px; }
+      .top-actions .ghost { padding: 7px 9px; }
+      .side { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .card { padding: 12px; border-radius: 13px; }
+      .card-value { font-size: 23px; }
+      .card-rows { font-size: 10.5px; }
+      .map-legend { font-size: 9.5px; gap: 6px 9px; }
+      .map-hint { display: none; }
+      .map-panel { padding: 0 6px; }
+      #map { width: 96%; margin: 0 auto; }
+      .timeline-controls { flex-wrap: wrap; }
+      .timeline-controls button { flex: 0 0 auto; }
+      #month-slider { flex-basis: 100%; order: 3; }
+      .kpi-grid { grid-template-columns: 1fr 1fr; }
+      .detail-panel { padding: 18px; }
+      .detail-table { font-size: 11.5px; }
+      .diag-metrics { grid-template-columns: 1fr 1fr; }
+      .section-head { display: block; }
+      .section-head p { margin-top: 3px; }
+    }
+    @media (max-width: 540px) {
+      .side { grid-template-columns: 1fr; }
+      .timeline-foot { display: none; }
+      .map-legend { display: none; }
+      .map-footnote { font-size: 9.5px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="error-banner" class="error-banner hidden" role="alert" aria-live="assertive">
+    <button class="error-close" id="error-close" type="button" aria-label="关闭错误提示">×</button>
+    <strong>页面运行异常</strong>
+    <div class="error-text" id="error-text"></div>
+  </div>
+
+  <!-- 开始界面 -->
+  <div id="start-screen" class="screen">
+    <div class="start-card">
+      <div class="eyebrow">V0.3.2 · 浏览器内引擎预览</div>
+      <h1>资本主义经济模拟</h1>
+      <p class="lead">在浏览器中完整运行场景 1 的当前引擎。所有卡片、六边形地图与诊断数字都来自同一份逐月仿真快照；这是对当前 Python 引擎的忠实移植，不修复其已知缺陷。</p>
+
+      <div class="start-section">
+        <h2>选择剧本</h2>
+        <div class="scenario-grid">
+          <button class="scenario active" data-scenario="industrial" type="button">
+            <strong>第一次工业革命</strong>
+            <small>600 名自耕农、500 名工业工人、100 名资产阶级；农业紧平衡，工业开始积累。</small>
+          </button>
+          <button class="scenario" disabled type="button">
+            <strong>晚期资本主义</strong>
+            <small>尚未实现。高资本积累、利润率下降与危机场景。</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="start-section">
+        <h2>仿真模式</h2>
+        <div class="mode-grid" id="mode-options">
+          <button class="mode-option active" data-mode="fast" type="button">
+            <strong>快速模式（调试）</strong>
+            <small>批量同步跑完，不做逐月界面刷新，只在结束时渲染；完成后显示总耗时与每 tick 毫秒数。默认。</small>
+          </button>
+          <button class="mode-option" data-mode="play" type="button">
+            <strong>游玩模式</strong>
+            <small>按可调间隔逐月推进并更新卡片、地图与诊断；带进度条和暂停/继续。</small>
+          </button>
+        </div>
+        <div class="play-options hidden" id="start-play-options">
+          <label for="start-interval">游玩模式间隔</label>
+          <select id="start-interval">
+            <option value="200">200 毫秒 / tick</option>
+            <option value="300" selected>300 毫秒 / tick</option>
+            <option value="500">500 毫秒 / tick</option>
+          </select>
+          <span>可在运行中通过时间轴下方的间隔选择器调整。</span>
+        </div>
+      </div>
+
+      <div class="start-section">
+        <h2>仿真时长</h2>
+        <div class="duration" id="duration-options">
+          <button data-months="60" type="button">60 月 · 5 年</button>
+          <button data-months="120" type="button">120 月 · 10 年</button>
+          <button data-months="240" class="active" type="button">240 月 · 20 年</button>
+        </div>
+      </div>
+
+      <div class="start-section">
+        <h2>随机种子</h2>
+        <div class="seed-line">
+          <label for="seed-input">种子</label>
+          <input id="seed-input" type="number" min="0" max="2147483647" step="1" value="1" inputmode="numeric" />
+          <small>0 至 2147483647。同一种子可复现；死亡随机流与 Python 参考引擎一致。</small>
+        </div>
+      </div>
+
+      <button id="start-btn" class="primary" type="button">开始运行</button>
+      <p class="start-error" id="start-error"></p>
+      <p class="fine">快速模式在浏览器内批量运行，结束后默认停在最后一个月；游玩模式按选定间隔逐月推进，可暂停。两种模式使用同一引擎与随机种子，完成后都可用时间轴回看任意月份。页面不发起网络请求。</p>
+      <ul class="defect-list">
+        <li>生产计划只影响投入品采购，不缩放实际产出，工业会反复停摆。</li>
+        <li>农业项目绕过活跃项目上限，会占满名额并锁死非农投资。</li>
+        <li>财务折旧把土地计入，与“土地不计折旧”的文档口径不一致。</li>
+        <li>农场化肥采购不计入当月中间投入成本。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <h1>资本主义经济模拟</h1>
+        <p><span id="run-meta">第一次工业革命</span><span id="run-status" class="status-pill">运行完成</span></p>
+      </div>
+      <div class="top-actions">
+        <button class="ghost" id="restart-btn" type="button">重新运行</button>
+        <button class="ghost" id="back-start" type="button">回到开始</button>
+      </div>
+    </header>
+
+    <section class="run-toolbar" aria-label="全期汇总与月份时间轴">
+      <div class="summary-strip" id="run-summary"></div>
+      <div class="timeline-panel">
+        <div class="timeline-head">
+          <span class="timeline-title">月份时间轴</span>
+          <span class="timeline-label" id="timeline-label">第 1 月 / 共 1 月</span>
+        </div>
+        <div class="timeline-controls">
+          <button id="prev-month" type="button" aria-label="上一月">‹ 上一月</button>
+          <input id="month-slider" type="range" min="1" max="1" step="1" value="1" aria-label="选择查看月份" />
+          <button id="next-month" type="button" aria-label="下一月">下一月 ›</button>
+          <button id="last-month" type="button">末月</button>
+        </div>
+        <div class="play-controls hidden" id="play-controls">
+          <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="play-progress-fill"></div></div>
+          <div class="play-control-row">
+            <span class="progress-text" id="play-progress-text">0 / 0 月</span>
+            <span class="play-speed-label">
+              <label for="play-interval">间隔</label>
+              <select id="play-interval">
+                <option value="200">200 毫秒 / tick</option>
+                <option value="300" selected>300 毫秒 / tick</option>
+                <option value="500">500 毫秒 / tick</option>
+              </select>
+            </span>
+            <button class="ghost" id="play-toggle" type="button">暂停</button>
+          </div>
+        </div>
+        <div class="timeline-foot">
+          <span>全期汇总固定显示整段运行；卡片与地图随选中月份切换。</span>
+          <span id="timeline-runtime"></span>
+        </div>
+      </div>
+    </section>
+
+    <main class="overview">
+      <aside class="side left" id="cards-left" aria-label="人口、农业与城市卡片"></aside>
+      <section class="map-panel" aria-label="六边形地块经济地图">
+        <div class="map-head">
+          <div>
+            <strong>六边形地图</strong>
+            <span class="map-caption" id="map-caption">第 1 月快照</span>
+          </div>
+          <span class="map-hint">悬停查看企业与设备明细</span>
+        </div>
+        <svg id="map" viewBox="0 0 1200 930" role="img" aria-label="按真实企业与设备聚合的六边形经济地图"></svg>
+        <div class="map-legend" aria-hidden="true">
+          <span class="legend-item"><span class="legend-dot" style="background:var(--grass)"></span>平原</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--mountain)"></span>山地</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--field)"></span>农田</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--textile)"></span>纺织</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--construction)"></span>施工</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--housing)"></span>住房</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--machinery)"></span>机械/农机</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--steel)"></span>钢铁/矿井</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--brick)"></span>砖厂</span>
+          <span class="legend-item"><span class="legend-dot" style="background:var(--fertilizer)"></span>化肥</span>
+          <span class="legend-item"><span class="legend-scale">数字</span>规模等级</span>
+          <span class="legend-item"><span class="legend-count">×N</span>合并企业/设备数</span>
+        </div>
+        <p class="map-footnote">同地块同行业同等级合并显示；农业与矿业以农机/矿井设备数量与等级展示。地图、卡片、诊断来自同一月份快照。</p>
+      </section>
+      <aside class="side right" id="cards-right" aria-label="产业、市场与金融卡片"></aside>
+    </main>
+
+    <section class="diagnostic-wrap" aria-labelledby="diagnostic-title">
+      <div class="section-head">
+        <h2 id="diagnostic-title">引擎诊断</h2>
+        <p>显示当前月份的真实机械行为；零产出、项目锁死等不是占位数据。</p>
+      </div>
+      <div class="diagnostic-grid">
+        <article class="diag-panel">
+          <h3>商品产出与连续零产出</h3>
+          <div class="diag-scroll">
+            <table class="diag-table">
+              <thead>
+                <tr><th>商品</th><th>当月产量</th><th>连续零产出月数</th><th>参考价</th><th>市场成交量</th></tr>
+              </thead>
+              <tbody id="zero-table"></tbody>
+            </table>
+          </div>
+          <p class="diag-note" id="zero-note">连续零产出月数按当前选中月份累计。价格带来自成本安全轨，不是均衡价格。</p>
+        </article>
+        <article class="diag-panel">
+          <h3>投资、利润与农业</h3>
+          <div class="diag-metrics" id="diag-metrics"></div>
+          <div class="project-box">
+            <div class="project-head">
+              <strong>活跃投资项目 · 按行业</strong>
+              <span class="project-big" id="project-total">0</span>
+            </div>
+            <div class="chips" id="project-chips"></div>
+          </div>
+          <ul class="warning-list" id="diag-warnings"></ul>
+        </article>
+      </div>
+    </section>
+
+    <footer class="fine" style="text-align:center;margin-top:22px;">
+      单文件离线运行 · 引擎与界面均内联，无外部依赖、外部图片或网络请求 · 经济逻辑保留 V0.3.2 的已知缺陷
+    </footer>
+  </div>
+
+  <!-- 领域详情 -->
+  <div id="detail" class="detail hidden">
+    <div class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+      <div class="detail-head">
+        <div>
+          <h2 id="detail-title">领域详情</h2>
+          <p id="detail-subtitle"></p>
+        </div>
+        <button class="close-detail" id="close-detail" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="kpi-grid" id="detail-kpis"></div>
+      <svg class="detail-chart" id="detail-chart" viewBox="0 0 760 190" role="img" aria-label="选中月份之前的趋势图"></svg>
+      <table class="detail-table">
+        <thead><tr><th>指标</th><th>当前月份数值</th></tr></thead>
+        <tbody id="detail-rows"></tbody>
+      </table>
+      <p class="detail-note" id="detail-note"></p>
+    </div>
+  </div>
+
+  <div id="tooltip" role="tooltip"></div>
+
+  <noscript>本页面需要启用 JavaScript 才能运行浏览器内引擎。</noscript>
+
+  <script>
+    // 在引擎脚本之前安装异常捕获，任何脚本错误都显示横幅而不是白屏。
+    (function () {
+      function show(message) {
+        var banner = document.getElementById("error-banner");
+        var text = document.getElementById("error-text");
+        if (!banner || !text) return;
+        text.textContent = message || "未知错误";
+        banner.classList.remove("hidden");
+      }
+      window.__showEcosimError = show;
+      window.addEventListener("error", function (event) {
+        show(event.message || "脚本错误");
+      });
+      window.addEventListener("unhandledrejection", function (event) {
+        var reason = event.reason;
+        show(reason && reason.message ? reason.message : String(reason || "未处理的异步错误"));
+      });
+      document.getElementById("error-close").addEventListener("click", function () {
+        document.getElementById("error-banner").classList.add("hidden");
+      });
+    })();
+  </script>
+
+  <script>
+/* 引擎开始 */
+(function () {
+  "use strict";
+
+  // ------------------------------------------------------------------
+  // 常量（逐项对应 src/ecosim/config.py）
+  // ------------------------------------------------------------------
+  const FOOD_PER_WORKER = 0.10;
+  const CLOTH_PER_WORKER = 1.0;
+  const HOUSING_PER_WORKER = 0.20;
+  const COMFORT_MULTIPLIER = 1.5;
+  const COMFORT_SAVINGS = 60.0;
+  const LEISURE_SAVINGS = 120.0;
+  const HOURS_OPTIONS = [16, 12, 8];
+  const DEFAULT_HOURS = 16;
+  const SKILL_MIN = 1.0;
+  const SKILL_MAX = 2.0;
+  const SKILL_GROWTH_PER_MONTH = 1.0 / 60.0;
+  const HUNGER_DEATH_AFTER_MONTHS = 3;
+  const HUNGER_DEATH_BASE = 0.08;
+  const HUNGER_DEATH_STEP = 0.08;
+  const HUNGER_DEATH_CAP = 0.50;
+  const WAGE_BASE = 20.0;
+  const WAGE_SEARCH_PREMIUM = 0.08;
+  const WAGE_SWITCH_THRESHOLD = 0.06;
+  const MAX_HIRES_PER_ENTERPRISE_PER_MONTH = 20;
+  const CAPITALIST_CONSUMPTION_RATE = 0.02;
+  const CAPITALIST_MIN_CONSUMPTION = 100.0;
+  const CAPITALIST_FOOD = 0.15;
+  const CAPITALIST_CLOTH = 1.5;
+  const CAPITALIST_HOUSING = 0.3;
+  const INVESTMENT_HURDLE = 0.012;
+  const INVESTMENT_RESERVE_MONTHS = 3.0;
+  const MAX_NEW_FIRMS_PER_TICK = 1;
+  const MAX_PROJECTS_PER_TICK = 5;
+  const MAX_ACTIVE_PROJECTS = 10;
+  const PROJECT_TIMEOUT_MONTHS = 18;
+  const DEPRECIATION_MONTHS = 120.0;
+  const DIVIDEND_PAYOUT = 0.50;
+  const TOTAL_LAND_MU = 6000.0;
+  const INITIAL_LAND_PRICE = 100.0;
+  const LAND_RESERVATION_PRICE = 150.0;
+  const LAND_PRICE_STEP = 0.05;
+  const LAND_SALES_PER_TICK = 0.02;
+  const MIN_CAPITALIST_FARM_MU = 50.0;
+  const TARGET_CAPITALIST_FARM_MU = 100.0;
+  const PRICE_STEP = 0.05;
+  const PRICE_FLOOR = 0.01;
+  const BANK_CASH = 100000.0;
+  const BANK_INTEREST_RATE = 0.01;
+  const BANK_LOAN_MONTHS = 3.0;
+  const BASE_GRAIN_YIELD = 0.01;
+  const FERTILIZER_PER_MU = 0.01;
+  const FERTILIZER_YIELD_MULTIPLIER = 2.0;
+  const LAND_PER_WORKER_BASE = 10.0;
+
+  const GOOD_ORDER = ["food", "coal", "iron_ore", "steel", "brick", "cloth", "fertilizer", "machinery", "building"];
+  const INDUSTRY_ORDER = [
+    "agriculture", "coal_mine", "iron_mine", "steel_mill", "brick_factory",
+    "textile_mill", "machinery_factory", "construction", "fertilizer_factory",
+  ];
+  const GOOD_LABELS = {
+    food: "粮食", coal: "煤炭", iron_ore: "铁矿石", steel: "钢铁", brick: "砖头",
+    cloth: "纺织品", fertilizer: "化肥", machinery: "机械", building: "建筑",
+  };
+  const GOOD_UNITS = {
+    food: "吨", coal: "吨", iron_ore: "吨", steel: "吨", brick: "吨",
+    cloth: "件", fertilizer: "吨", machinery: "台", building: "平方米",
+  };
+  const INDUSTRY_LABELS = {
+    agriculture: "农业", coal_mine: "煤矿", iron_mine: "铁矿", steel_mill: "炼钢",
+    brick_factory: "砖厂", textile_mill: "纺织", machinery_factory: "机械",
+    construction: "施工", fertilizer_factory: "化肥",
+  };
+  const INITIAL_PRICES = {
+    food: 100.0, coal: 20.0, iron_ore: 30.0, steel: 150.0, brick: 10.0,
+    cloth: 1.0, fertilizer: 50.0, machinery: 200.0, building: 10.0,
+  };
+
+  const SECTOR_PARAMS = {
+    agriculture: { industry: "agriculture", output: "food", inputs: {}, maxFirms: 300, isResource: true },
+    coal_mine: { industry: "coal_mine", output: "coal", inputs: {}, maxFirms: 30, isResource: true },
+    iron_mine: { industry: "iron_mine", output: "iron_ore", inputs: {}, maxFirms: 15, isResource: true },
+    steel_mill: { industry: "steel_mill", output: "steel", inputs: { iron_ore: 1.5, coal: 1.0 }, maxFirms: 8 },
+    brick_factory: { industry: "brick_factory", output: "brick", inputs: { coal: 0.2 }, maxFirms: 5 },
+    textile_mill: { industry: "textile_mill", output: "cloth", inputs: { food: 0.001 }, maxFirms: 6 },
+    machinery_factory: { industry: "machinery_factory", output: "machinery", inputs: { steel: 1.0 }, maxFirms: 4 },
+    construction: { industry: "construction", output: "building", inputs: { brick: 0.5 }, maxFirms: 6 },
+    fertilizer_factory: { industry: "fertilizer_factory", output: "fertilizer", inputs: { coal: 2.0 }, maxFirms: 3 },
+  };
+
+  // 8 级 2^N 设备目录。依据 config._make_equipment_tiers 逐项生成。
+  const EQUIPMENT = {};
+  function makeEquipmentTiers(prefix, industry, label, baseCapacity, baseWorkers, capitalGood,
+    t0Cost, upgradeCost, baseBuildMonths, powerBase) {
+    for (let n = 0; n < 8; n++) {
+      const key = `${prefix}_t${n}`;
+      let cost;
+      let good;
+      if (n === 0) {
+        cost = t0Cost;
+        good = t0Cost > 0 ? capitalGood : null;
+      } else {
+        cost = upgradeCost * Math.pow(2, n - 1);
+        good = capitalGood;
+      }
+      EQUIPMENT[key] = {
+        key,
+        label: `${label} ${Math.pow(2, n)}×`,
+        industry,
+        capacity: baseCapacity * Math.pow(2, n),
+        workers: powerBase > 0 ? 0 : baseWorkers + n,
+        capitalGood: good,
+        capitalCost: cost,
+        buildMonths: baseBuildMonths + Math.floor(n / 2),
+        power: powerBase > 0 ? powerBase * Math.pow(2, n) : 0,
+        buildingCost: 0,
+      };
+    }
+  }
+  makeEquipmentTiers("farm", "agriculture", "农机", 0, 0, "machinery", 1.0, 2.0, 2, 1.0);
+  [
+    ["coal", "coal_mine", "手工矿井", 10.0, 10, "machinery", 0.0, 2.0, 0],
+    ["iron", "iron_mine", "手工矿井", 10.0, 10, "machinery", 0.0, 2.0, 0],
+    ["steel", "steel_mill", "炼钢炉", 50.0, 3, "brick", 1000.0, 2000.0, 2],
+    ["brick", "brick_factory", "砖窑", 100.0, 50, "brick", 300.0, 600.0, 2],
+    ["textile", "textile_mill", "织机", 50.0, 1, "machinery", 0.0, 5.0, 1],
+    ["machinery", "machinery_factory", "机械工坊", 5.0, 10, "steel", 0.0, 20.0, 1],
+    ["construction", "construction", "施工队", 50.0, 20, "machinery", 0.0, 3.0, 1],
+    ["fertilizer", "fertilizer_factory", "反应炉", 20.0, 5, "machinery", 1.0, 2.0, 2],
+  ].forEach(([prefix, industry, label, capacity, workers, good, t0, upgrade, build]) => {
+    makeEquipmentTiers(prefix, industry, label, capacity, workers, good, t0, upgrade, build, 0);
+  });
+  for (const industry of INDUSTRY_ORDER) {
+    SECTOR_PARAMS[industry].equipment = Array.from({ length: 8 }, (_, n) => {
+      const prefix = {
+        agriculture: "farm", coal_mine: "coal", iron_mine: "iron", steel_mill: "steel",
+        brick_factory: "brick", textile_mill: "textile", machinery_factory: "machinery",
+        construction: "construction", fertilizer_factory: "fertilizer",
+      }[industry];
+      return `${prefix}_t${n}`;
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 基础工具
+  // ------------------------------------------------------------------
+  function zeros() {
+    const out = {};
+    for (const g of GOOD_ORDER) out[g] = 0.0;
+    return out;
+  }
+  function copyNumbers(obj) {
+    const out = {};
+    for (const g of GOOD_ORDER) out[g] = obj[g] || 0.0;
+    return out;
+  }
+  function roundToEven(x, digits) {
+    // 复现 Python round(x, 2) 的“最接近、逢半取偶”行为。
+    if (!Number.isFinite(x) || x === 0) return x;
+    const negative = x < 0;
+    const abs = Math.abs(x);
+    const factor = Math.pow(10, digits);
+    const buf = new ArrayBuffer(8);
+    const dv = new DataView(buf);
+    dv.setFloat64(0, abs, false);
+    const hi = dv.getUint32(0, false);
+    const lo = dv.getUint32(4, false);
+    const expBits = (hi >>> 20) & 0x7ff;
+    let mantissa = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+    let exponent;
+    if (expBits === 0) {
+      exponent = -1074;
+    } else {
+      mantissa |= 1n << 52n;
+      exponent = expBits - 1023 - 52;
+    }
+    const numerator = mantissa * BigInt(factor);
+    let rounded;
+    if (exponent >= 0) {
+      rounded = numerator << BigInt(exponent);
+    } else {
+      const denominator = 1n << BigInt(-exponent);
+      rounded = numerator / denominator;
+      const remainder = numerator % denominator;
+      const twice = remainder * 2n;
+      if (twice > denominator || (twice === denominator && (rounded & 1n) === 1n)) {
+        rounded += 1n;
+      }
+    }
+    const value = Number(rounded) / factor;
+    return negative ? -value : value;
+  }
+  function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+  function sortedById(items) {
+    return items.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+  function mapValues(map) { return Array.from(map.values()); }
+  function maxZero(x) { return Math.max(0, x); }
+
+  // Python random.Random(seed) 的 MT19937 随机流。
+  // CPython 对整数种子使用 init_by_array（把整数拆成 32 位小端字），
+  // 因此这里的死亡随机流与 Python 逐位一致，不使用 mulberry32。
+  class PythonRandom {
+    constructor(seed) {
+      this.mt = new Uint32Array(624);
+      this.index = 624;
+      this.seed(seed);
+    }
+    seed(seed) {
+      let number = Math.abs(Math.trunc(Number(seed) || 0));
+      const key = [];
+      if (number === 0) key.push(0);
+      while (number > 0) {
+        key.push(number >>> 0);
+        number = Math.floor(number / 4294967296);
+      }
+      this.initByArray(key);
+    }
+    initByArray(key) {
+      const mt = this.mt;
+      mt[0] = 19650218;
+      for (let i = 1; i < 624; i++) {
+        const prev = mt[i - 1];
+        mt[i] = (Math.imul(1812433253, (prev ^ (prev >>> 30)) >>> 0) + i) >>> 0;
+      }
+      let i = 1;
+      let j = 0;
+      for (let k = Math.max(624, key.length); k > 0; k--) {
+        const prev = mt[i - 1];
+        const mixed = Math.imul((prev ^ (prev >>> 30)) >>> 0, 1664525) >>> 0;
+        mt[i] = ((mt[i] ^ mixed) + key[j] + j) >>> 0;
+        i += 1;
+        j += 1;
+        if (i >= 624) { mt[0] = mt[623]; i = 1; }
+        if (j >= key.length) j = 0;
+      }
+      for (let k = 623; k > 0; k--) {
+        const prev = mt[i - 1];
+        const mixed = Math.imul((prev ^ (prev >>> 30)) >>> 0, 1566083941) >>> 0;
+        mt[i] = ((mt[i] ^ mixed) - i) >>> 0;
+        i += 1;
+        if (i >= 624) { mt[0] = mt[623]; i = 1; }
+      }
+      mt[0] = 0x80000000;
+      this.index = 624;
+    }
+    twist() {
+      for (let i = 0; i < 624; i++) {
+        const y = (this.mt[i] & 0x80000000) | (this.mt[(i + 1) % 624] & 0x7fffffff);
+        let value = this.mt[(i + 397) % 624] ^ (y >>> 1);
+        if (y & 1) value ^= 0x9908b0df;
+        this.mt[i] = value >>> 0;
+      }
+      this.index = 0;
+    }
+    uint32() {
+      if (this.index >= 624) this.twist();
+      let y = this.mt[this.index++];
+      y ^= y >>> 11;
+      y ^= (y << 7) & 0x9d2c5680;
+      y ^= (y << 15) & 0xefc60000;
+      y ^= y >>> 18;
+      return y >>> 0;
+    }
+    random() {
+      // 与 CPython random_random 的 genrand_res53 组合方式一致。
+      const a = this.uint32() >>> 5;
+      const b = this.uint32() >>> 6;
+      return (a * 67108864.0 + b) * (1.0 / 9007199254740992.0);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 实体。使用普通对象 + 显式初始化，字段名对应 models.py。
+  // ------------------------------------------------------------------
+  function createWorker(id, industry, skill, cash, food) {
+    return {
+      id, industry,
+      skill: skill === undefined ? 1.0 : skill,
+      cash: cash === undefined ? 0.0 : cash,
+      food: food === undefined ? FOOD_PER_WORKER : food,
+      cloth: 1.0,
+      housing: 0.2,
+      employerId: null,
+      wage: 0.0,
+      hours: DEFAULT_HOURS,
+      alive: true,
+      hungerMonths: 0,
+      isOwnerOperator: false,
+      landOwned: 0.0,
+      consumedFood: 0.0,
+      consumedCloth: 0.0,
+      consumedHousing: 0.0,
+      livingStandard: "survival",
+    };
+  }
+  function createEnterprise(id, industry, ownerId, cash, land, isHousehold, modernizationCapable) {
+    return {
+      id, industry, ownerId,
+      isHousehold: !!isHousehold,
+      cash: cash || 0.0,
+      debt: 0.0,
+      land: land || 0.0,
+      equipment: new Map(),
+      inventory: zeros(),
+      workers: [],
+      active: true,
+      age: 0,
+      lastInvestTick: -999,
+      bankruptcyMonths: 0,
+      modernizationCapable: modernizationCapable === undefined ? true : modernizationCapable,
+      smoothedSales: 0.0,
+      askPrices: {},
+      plannedOutput: 0.0,
+      useFertilizer: false,
+      lastOutput: 0.0,
+      lastInputUsed: {},
+      lastRevenue: 0.0,
+      lastCosts: 0.0,
+      lastWages: 0.0,
+      lastInterest: 0.0,
+      lastProfit: 0.0,
+      lastSales: zeros(),
+      monthRevenue: 0.0,
+      monthInputCost: 0.0,
+      monthWages: 0.0,
+      monthInterest: 0.0,
+    };
+  }
+  function inv(enterprise, good) { return enterprise.inventory[good] || 0.0; }
+  function equipmentCount(enterprise, key) { return enterprise.equipment.get(key) || 0; }
+  function totalEquipment(enterprise) {
+    let sum = 0;
+    for (const count of enterprise.equipment.values()) sum += count;
+    return sum;
+  }
+  function addEquipment(enterprise, key, quantity) {
+    enterprise.equipment.set(key, (enterprise.equipment.get(key) || 0) + quantity);
+  }
+  function resetMonthFlows(enterprise) {
+    enterprise.monthRevenue = 0.0;
+    enterprise.monthInputCost = 0.0;
+    enterprise.monthWages = 0.0;
+    enterprise.monthInterest = 0.0;
+    enterprise.lastSales = zeros();
+    enterprise.lastOutput = 0.0;
+    enterprise.lastInputUsed = {};
+  }
+  function createCapitalist(id, cash, role) {
+    return {
+      id, cash, role: role || "director",
+      food: CAPITALIST_FOOD, cloth: CAPITALIST_CLOTH, housing: CAPITALIST_HOUSING,
+      consumedFood: 0.0, consumedCloth: 0.0, consumedHousing: 0.0,
+    };
+  }
+  function createProject(id, industry, enterpriseId, equipmentKey, needed, cash, createdTick, buildMonths, isNewEnterprise) {
+    return {
+      id, industry, enterpriseId, equipmentKey, quantity: 1,
+      needed, cash, createdTick, buildMonths,
+      isNewEnterprise: !!isNewEnterprise,
+      received: zeros(),
+      inventory: zeros(),
+      monthsLeft: 0,
+      age: 0,
+      active: true,
+      started: false,
+    };
+  }
+  function fullyPaid(project) {
+    for (const [good, qty] of project.needed) {
+      if ((project.received[good] || 0.0) + 1e-9 < qty) return false;
+    }
+    return true;
+  }
+  function projectRemaining(project, good) {
+    return Math.max(0.0, (project.needed.get(good) || 0.0) - (project.received[good] || 0.0));
+  }
+  class Bank {
+    constructor(cash, interestRate) {
+      this.cash = cash;
+      this.interestRate = interestRate;
+      this.loans = new Map();
+    }
+    lend(enterprise, amount) {
+      amount = Math.max(0.0, Math.min(amount, this.cash));
+      if (amount <= 1e-9) return 0.0;
+      this.cash -= amount;
+      enterprise.cash += amount;
+      enterprise.debt += amount;
+      this.loans.set(enterprise.id, (this.loans.get(enterprise.id) || 0.0) + amount);
+      return amount;
+    }
+    chargeInterest(enterprise) {
+      if (enterprise.debt <= 0) return 0.0;
+      const interest = enterprise.debt * this.interestRate;
+      const payable = Math.min(interest, Math.max(enterprise.cash, 0.0));
+      enterprise.cash -= payable;
+      this.cash += payable;
+      enterprise.debt += interest - payable;
+      enterprise.monthInterest += payable;
+      return payable;
+    }
+    repay(enterprise, amount) {
+      amount = Math.max(0.0, Math.min(amount, enterprise.debt, enterprise.cash));
+      if (amount <= 1e-9) return 0.0;
+      enterprise.cash -= amount;
+      enterprise.debt -= amount;
+      this.cash += amount;
+      this.loans.set(enterprise.id, Math.max(0.0, (this.loans.get(enterprise.id) || 0.0) - amount));
+      return amount;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 生产函数
+  // ------------------------------------------------------------------
+  function equipmentSummary(enterprise) {
+    let capacity = 0.0;
+    let workers = 0;
+    let units = 0;
+    for (const [key, count] of enterprise.equipment) {
+      if (count <= 0) continue;
+      const et = EQUIPMENT[key];
+      capacity += et.capacity * count;
+      workers += et.workers * count;
+      units += count;
+    }
+    return [capacity, workers, units];
+  }
+  function farmRequirements(enterprise) {
+    let power = 0.0;
+    for (const [key, count] of enterprise.equipment) {
+      if (count <= 0) continue;
+      power += EQUIPMENT[key].power * count;
+    }
+    if (enterprise.land <= 0) return [0, power];
+    const landPerWorker = LAND_PER_WORKER_BASE * (1.0 + power);
+    return [Math.max(1, Math.ceil(enterprise.land / landPerWorker)), power];
+  }
+  function desiredWorkers(enterprise) {
+    if (enterprise.industry === "agriculture") return farmRequirements(enterprise)[0];
+    return equipmentSummary(enterprise)[1];
+  }
+  function capacityAtSkillOne(enterprise) {
+    if (enterprise.industry === "agriculture") return enterprise.land * BASE_GRAIN_YIELD;
+    return equipmentSummary(enterprise)[0];
+  }
+  function averageSkill(workers) {
+    if (!workers.length) return 0.0;
+    let sum = 0.0;
+    for (const worker of workers) sum += worker.skill;
+    return sum / workers.length;
+  }
+  function workerEffectiveLabor(worker) { return worker.hours / 16.0; }
+  function averageWage(workers) {
+    if (!workers.length) return 0.0;
+    let wages = 0.0;
+    let labor = 0.0;
+    for (const worker of workers) {
+      wages += worker.wage * workerEffectiveLabor(worker);
+      labor += workerEffectiveLabor(worker);
+    }
+    return wages / Math.max(labor, 1e-9);
+  }
+  function equipmentValue(enterprise, prices) {
+    let value = 0.0;
+    for (const [key, count] of enterprise.equipment) {
+      if (count <= 0) continue;
+      const et = EQUIPMENT[key];
+      if (et.capitalGood !== null) value += count * et.capitalCost * (prices[et.capitalGood] || 0.0);
+      value += count * et.buildingCost * (prices.building || 0.0);
+    }
+    return value;
+  }
+  function capitalValue(enterprise, prices, landPrice) {
+    let value = enterprise.land * landPrice;
+    for (const [key, count] of enterprise.equipment) {
+      if (count <= 0) continue;
+      const et = EQUIPMENT[key];
+      if (et.capitalGood !== null) value += count * et.capitalCost * (prices[et.capitalGood] || 0.0);
+      value += count * et.buildingCost * (prices.building || 0.0);
+    }
+    return value;
+  }
+  function inventoryValue(enterprise, prices) {
+    let value = 0.0;
+    for (const good of GOOD_ORDER) value += (enterprise.inventory[good] || 0.0) * (prices[good] || 0.0);
+    return value;
+  }
+  function netWorth(enterprise, prices, landPrice) {
+    return enterprise.cash + inventoryValue(enterprise, prices)
+      + capitalValue(enterprise, prices, landPrice) - enterprise.debt;
+  }
+  function equipmentCost(equipmentKey, prices) {
+    const et = EQUIPMENT[equipmentKey];
+    let goodCost = 0.0;
+    if (et.capitalGood !== null) goodCost = et.capitalCost * (prices[et.capitalGood] || 0.0);
+    const buildingCost = et.buildingCost * (prices.building || 0.0);
+    return goodCost + buildingCost;
+  }
+  function fullCapacityUnitCost(enterprise, prices, workers) {
+    const capacity = capacityAtSkillOne(enterprise);
+    const required = desiredWorkers(enterprise);
+    if (capacity <= 0 || required <= 0) return 0.0;
+    let effective = 0.0;
+    for (const w of workers) effective += workerEffectiveLabor(w);
+    const skill = averageSkill(workers) || 1.0;
+    const output = capacity * Math.min(1.0, effective / required) * skill;
+    if (output <= 1e-9) return 0.0;
+    let wageBill = 0.0;
+    for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+    const depreciation = equipmentValue(enterprise, prices) / DEPRECIATION_MONTHS;
+    if (enterprise.industry === "agriculture") {
+      let fertilizerCost = 0.0;
+      if (enterprise.useFertilizer) {
+        fertilizerCost = enterprise.land * FERTILIZER_PER_MU * (prices.fertilizer || 0.0);
+      }
+      return (wageBill + fertilizerCost + depreciation) / output;
+    }
+    const params = SECTOR_PARAMS[enterprise.industry];
+    let inputCost = 0.0;
+    for (const [good, ratio] of Object.entries(params.inputs)) {
+      inputCost += ratio * output * (prices[good] || 0.0);
+    }
+    return (wageBill + inputCost + depreciation) / output;
+  }
+  function unitCost(enterprise, prices, workers, landPrice) {
+    // 注意：文档说土地不计折旧；本函数确实只折旧设备，但 _finance 用了包含土地的 capital_value。
+    const output = enterprise.lastOutput;
+    if (output <= 1e-9) return fullCapacityUnitCost(enterprise, prices, workers);
+    let wageBill = 0.0;
+    for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+    let inputCost = 0.0;
+    for (const [good, qty] of Object.entries(enterprise.lastInputUsed)) {
+      inputCost += qty * (prices[good] || 0.0);
+    }
+    const depreciation = equipmentValue(enterprise, prices) / DEPRECIATION_MONTHS;
+    return (wageBill + inputCost + depreciation) / output;
+  }
+  function representativeRoi(industry, equipmentKey, prices, wage, landPrice) {
+    const et = EQUIPMENT[equipmentKey];
+    const params = SECTOR_PARAMS[industry];
+    if (industry === "agriculture") {
+      const land = TARGET_CAPITALIST_FARM_MU;
+      const power = et.power;
+      const required = Math.max(1, Math.ceil(land / (LAND_PER_WORKER_BASE * (1.0 + power))));
+      const output = land * BASE_GRAIN_YIELD * FERTILIZER_YIELD_MULTIPLIER * SKILL_MAX;
+      const revenue = output * (prices[params.output] || 0.0);
+      const fertilizer = land * FERTILIZER_PER_MU * (prices.fertilizer || 0.0);
+      const wages = required * wage;
+      const capital = land * landPrice + equipmentCost(equipmentKey, prices);
+      const profit = revenue - fertilizer - wages;
+      return capital > 0 ? profit / capital : -1.0;
+    }
+    const output = et.capacity * SKILL_MAX;
+    const revenue = output * (prices[params.output] || 0.0);
+    let inputCost = 0.0;
+    for (const [good, ratio] of Object.entries(params.inputs)) {
+      inputCost += ratio * output * (prices[good] || 0.0);
+    }
+    const wages = et.workers * wage;
+    const capital = equipmentCost(equipmentKey, prices);
+    const profit = revenue - inputCost - wages;
+    return capital > 0 ? profit / capital : -1.0;
+  }
+
+  function produce(engine, enterprise) {
+    const workers = enterprise.workers
+      .map((id) => engine.workers.get(id))
+      .filter((w) => w && w.alive);
+    if (!workers.length) {
+      enterprise.lastOutput = 0.0;
+      enterprise.lastInputUsed = {};
+      return 0.0;
+    }
+    let effectiveLabor = 0.0;
+    for (const w of workers) effectiveLabor += workerEffectiveLabor(w);
+    const skill = averageSkill(workers);
+
+    if (enterprise.industry === "agriculture") {
+      const required = farmRequirements(enterprise)[0];
+      if (enterprise.land <= 0 || required <= 0) {
+        enterprise.lastOutput = 0.0;
+        return 0.0;
+      }
+      const utilisation = Math.min(1.0, effectiveLabor / required);
+      const baseCapacity = enterprise.land * BASE_GRAIN_YIELD * skill;
+      let multiplier = 1.0;
+      let fertilizerUsed = 0.0;
+      if (enterprise.useFertilizer) {
+        const needed = enterprise.land * FERTILIZER_PER_MU;
+        if (inv(enterprise, "fertilizer") + 1e-9 >= needed) {
+          multiplier = FERTILIZER_YIELD_MULTIPLIER;
+          fertilizerUsed = needed;
+          enterprise.inventory.fertilizer -= needed;
+        } else {
+          enterprise.useFertilizer = false;
+        }
+      }
+      const output = baseCapacity * utilisation * multiplier;
+      enterprise.inventory.food = inv(enterprise, "food") + output;
+      enterprise.lastOutput = output;
+      enterprise.lastInputUsed = fertilizerUsed > 0 ? { fertilizer: fertilizerUsed } : {};
+      return output;
+    }
+
+    const [capacity, required] = equipmentSummary(enterprise);
+    if (capacity <= 0 || required <= 0) {
+      enterprise.lastOutput = 0.0;
+      return 0.0;
+    }
+    const utilisation = Math.min(1.0, effectiveLabor / required);
+    const theoretical = capacity * utilisation * skill;
+    const params = SECTOR_PARAMS[enterprise.industry];
+    let maxOutput = theoretical;
+    for (const [good, ratio] of Object.entries(params.inputs)) {
+      if (ratio <= 0) continue;
+      maxOutput = Math.min(maxOutput, inv(enterprise, good) / ratio);
+    }
+    maxOutput = Math.max(0.0, maxOutput);
+    const used = {};
+    for (const [good, ratio] of Object.entries(params.inputs)) {
+      const consumed = maxOutput * ratio;
+      enterprise.inventory[good] = Math.max(0.0, inv(enterprise, good) - consumed);
+      used[good] = consumed;
+    }
+    enterprise.inventory[params.output] = inv(enterprise, params.output) + maxOutput;
+    enterprise.lastOutput = maxOutput;
+    enterprise.lastInputUsed = used;
+    return maxOutput;
+  }
+
+  // ------------------------------------------------------------------
+  // 决策规则
+  // ------------------------------------------------------------------
+  function subsistenceCost(prices) {
+    return 0.1 * (prices.food === undefined ? 100.0 : prices.food)
+      + (prices.cloth === undefined ? 1.0 : prices.cloth)
+      + 0.2 * (prices.building === undefined ? 10.0 : prices.building);
+  }
+  function wageFloor(prices) {
+    return Math.max(WAGE_BASE, subsistenceCost(prices) * 1.1);
+  }
+  function enterpriseWorkers(engine, enterprise) {
+    const out = [];
+    for (const id of enterprise.workers) {
+      const w = engine.workers.get(id);
+      if (w && w.alive) out.push(w);
+    }
+    return out;
+  }
+  function enterpriseWageOffer(engine, enterprise) {
+    const workers = enterpriseWorkers(engine, enterprise);
+    const floor = wageFloor(engine.market.referencePrices);
+    let offer = Math.max(WAGE_BASE, floor);
+    if (enterprise.lastRevenue > 0 && enterprise.lastProfit > 0) {
+      const margin = clamp(enterprise.lastProfit / enterprise.lastRevenue, 0.0, 0.35);
+      offer *= 1.0 + margin * 0.5;
+    }
+    if (workers.length < desiredWorkers(enterprise)) offer *= 1.10;
+    let wageBill = 0.0;
+    for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+    if (enterprise.cash < Math.max(wageBill * 2.0, offer * 2.0)) offer *= 0.95;
+    return Math.max(floor, roundToEven(offer, 2));
+  }
+  function enterpriseAskPrice(engine, enterprise) {
+    const params = SECTOR_PARAMS[enterprise.industry];
+    const out = params.output;
+    const ref = engine.market.referencePrices[out] === undefined ? 1.0 : engine.market.referencePrices[out];
+    const workers = enterpriseWorkers(engine, enterprise);
+    const cost = unitCost(enterprise, engine.market.referencePrices, workers, engine.land.price);
+    const inventory = inv(enterprise, out);
+    let sales = enterprise.smoothedSales;
+    let months;
+    if (sales <= 1e-6) {
+      months = inventory > 0 ? 3.0 : 0.0;
+    } else {
+      months = inventory / sales;
+    }
+    let price;
+    if (months > 3.0) {
+      price = Math.min(ref * 0.90, cost > 0 ? cost * 1.05 : ref * 0.90);
+    } else if (months < 0.5) {
+      price = ref * 1.02;
+    } else {
+      price = ref * 0.98;
+    }
+    if (cost > 0) price = Math.max(price, cost * 0.85);
+    price = Math.min(price, ref * 1.02);
+    return Math.max(0.01, price);
+  }
+  function productionPlan(engine, enterprise) {
+    // 缺陷保留：本函数的结果只被 input_needs 使用；produce() 不按计划缩放产出。
+    if (enterprise.industry === "agriculture") {
+      return enterprise.land > 0 && enterprise.workers.length ? 1.0 : 0.0;
+    }
+    const params = SECTOR_PARAMS[enterprise.industry];
+    const out = params.output;
+    const capacity = capacityAtSkillOne(enterprise);
+    if (capacity <= 0) return 0.0;
+    const inventory = inv(enterprise, out);
+    const sales = Math.max(enterprise.smoothedSales, 0.0);
+    let target;
+    if (sales <= 1e-6) target = Math.max(capacity * 0.5, 1.0);
+    else target = Math.max(sales * 1.2, capacity * 0.1);
+    const desired = Math.max(0.0, target - inventory);
+    let plan = desired / capacity;
+    if (plan < 0.1 && inventory < target) plan = 0.1;
+    return Math.max(0.0, Math.min(1.0, plan));
+  }
+  function wantsFertilizer(engine, enterprise) {
+    if (enterprise.industry !== "agriculture" || enterprise.land <= 0) return false;
+    if (!enterprise.modernizationCapable) return false;
+    const foodPrice = engine.market.referencePrices.food || 0.0;
+    const fertilizerPrice = engine.market.referencePrices.fertilizer || 0.0;
+    const extraYield = enterprise.land * BASE_GRAIN_YIELD * (FERTILIZER_YIELD_MULTIPLIER - 1.0);
+    const benefit = extraYield * foodPrice * SKILL_MAX;
+    const cost = enterprise.land * FERTILIZER_PER_MU * fertilizerPrice;
+    return benefit > cost * 1.15;
+  }
+  function inputNeeds(engine, enterprise) {
+    const params = SECTOR_PARAMS[enterprise.industry];
+    const needs = {};
+    if (enterprise.industry === "agriculture") {
+      if (wantsFertilizer(engine, enterprise)) {
+        const needed = enterprise.land * FERTILIZER_PER_MU - inv(enterprise, "fertilizer");
+        if (needed > 1e-9) needs.fertilizer = needed;
+      }
+      return needs;
+    }
+    const plan = productionPlan(engine, enterprise);
+    const workers = enterpriseWorkers(engine, enterprise);
+    const skill = workers.length ? workers.reduce((sum, w) => sum + w.skill, 0) / workers.length : 0.0;
+    const expectedOutput = capacityAtSkillOne(enterprise) * plan * skill;
+    for (const [good, ratio] of Object.entries(params.inputs)) {
+      const needed = expectedOutput * ratio - inv(enterprise, good);
+      if (needed > 1e-9) needs[good] = needed;
+    }
+    return needs;
+  }
+  function bestEquipmentChoice(engine, industry, budget) {
+    const prices = engine.market.referencePrices;
+    const wage = engine.averageWage();
+    const landPrice = engine.land.price;
+    const candidates = [];
+    for (const key of SECTOR_PARAMS[industry].equipment) {
+      const et = EQUIPMENT[key];
+      if (et.capitalGood === null || et.buildMonths <= 0) continue;
+      const cost = equipmentCost(key, prices);
+      if (budget !== undefined && budget !== null && cost > budget) continue;
+      const roi = representativeRoi(industry, key, prices, wage, landPrice);
+      candidates.push([cost, key, roi]);
+    }
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => (a[0] - b[0]) || (b[2] - a[2]));
+    return [candidates[0][1], candidates[0][2]];
+  }
+  function shouldInvest(engine, enterprise) {
+    if (!enterprise.active) return null;
+    if (enterprise.industry === "agriculture" && !enterprise.modernizationCapable) return null;
+    if (enterprise.industry === "fertilizer_factory" && totalEquipment(enterprise) >= 2) return null;
+    const workers = enterpriseWorkers(engine, enterprise);
+    let wageBill = 0.0;
+    for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+    const reserve = Math.max(wageBill * 3.0, 100.0);
+    const available = enterprise.cash - reserve;
+    if (available <= 0) return null;
+    const choice = bestEquipmentChoice(engine, enterprise.industry, available / 1.10);
+    if (choice === null) return null;
+    const [key, roi] = choice;
+    if (roi < INVESTMENT_HURDLE) return null;
+    const cost = equipmentCost(key, engine.market.referencePrices);
+    if (enterprise.cash < cost * 1.10 + reserve) return null;
+    if (engine.tick - enterprise.lastInvestTick < 6) return null;
+    return [key, roi];
+  }
+  function agriculturalEntryRoi(engine) {
+    return bestEquipmentChoice(engine, "agriculture") || ["farm_t0", -1.0];
+  }
+
+  // ------------------------------------------------------------------
+  // 市场
+  // ------------------------------------------------------------------
+  class Market {
+    constructor(prices) {
+      this.referencePrices = Object.assign({}, prices);
+      this.ordersBuy = {};
+      this.ordersSell = {};
+      this.history = {};
+      for (const good of GOOD_ORDER) {
+        this.ordersBuy[good] = [];
+        this.ordersSell[good] = [];
+        this.history[good] = {
+          volume: 0.0, price: this.referencePrices[good], demand: 0.0,
+          supply: 0.0, unsold: 0.0, unmet: 0.0,
+        };
+      }
+      this.consumptionSpending = 0.0;
+      this.investmentSpending = 0.0;
+      this.ceilings = {};
+      this.floors = {};
+    }
+    submitBuy(agent, good, quantity, price) {
+      if (quantity > 1e-9 && price > 0) {
+        this.ordersBuy[good].push({ agent, good, side: "buy", quantity, price });
+      }
+    }
+    submitSell(agent, good, quantity, price) {
+      if (quantity > 1e-9 && price > 0) {
+        this.ordersSell[good].push({ agent, good, side: "sell", quantity, price });
+      }
+    }
+    clear() {
+      for (const good of GOOD_ORDER) {
+        this.ordersBuy[good].length = 0;
+        this.ordersSell[good].length = 0;
+      }
+    }
+    match() {
+      const transactions = [];
+      for (const good of GOOD_ORDER) {
+        const buys = this.ordersBuy[good].slice().sort((a, b) => b.price - a.price);
+        const sells = this.ordersSell[good].slice().sort((a, b) => a.price - b.price);
+        const demand = buys.reduce((sum, order) => sum + order.quantity, 0.0);
+        const supply = sells.reduce((sum, order) => sum + order.quantity, 0.0);
+        let volume = 0.0;
+        let value = 0.0;
+        while (buys.length && sells.length) {
+          const b = buys[0];
+          const s = sells[0];
+          if (b.price + 1e-9 < s.price) break;
+          const dealPrice = (b.price + s.price) / 2.0;
+          let dealVolume = Math.min(b.quantity, s.quantity);
+          const buyerCash = Math.max(Number(b.agent.cash) || 0.0, 0.0);
+          if (buyerCash < dealPrice * dealVolume) {
+            dealVolume = dealPrice > 0 ? buyerCash / dealPrice : 0.0;
+          }
+          if (s.agent instanceof Enterprise) {
+            dealVolume = Math.min(dealVolume, inv(s.agent, good));
+          }
+          if (dealVolume <= 1e-9) {
+            if (buyerCash <= 1e-9) buys.shift();
+            else sells.shift();
+            continue;
+          }
+          const amount = dealPrice * dealVolume;
+          b.agent.cash -= amount;
+          s.agent.cash += amount;
+          this.receiveGood(b.agent, good, dealVolume);
+          this.deliverGood(s.agent, good, dealVolume);
+          if (b.agent instanceof Worker || b.agent instanceof Capitalist) {
+            this.consumptionSpending += amount;
+          }
+          if (b.agent instanceof InvestmentProject) this.investmentSpending += amount;
+          if (b.agent instanceof Enterprise) {
+            const inputs = SECTOR_PARAMS[b.agent.industry].inputs;
+            if (Object.prototype.hasOwnProperty.call(inputs, good)) {
+              b.agent.monthInputCost += amount;
+            }
+          }
+          if (s.agent instanceof Enterprise) {
+            s.agent.monthRevenue += amount;
+            s.agent.lastSales[good] = (s.agent.lastSales[good] || 0.0) + dealVolume;
+          }
+          if (b.agent instanceof InvestmentProject) {
+            b.agent.received[good] = (b.agent.received[good] || 0.0) + dealVolume;
+          }
+          transactions.push({ seller: s.agent, buyer: b.agent, good, quantity: dealVolume, price: dealPrice });
+          b.quantity -= dealVolume;
+          s.quantity -= dealVolume;
+          volume += dealVolume;
+          value += amount;
+          if (b.quantity <= 1e-9) buys.shift();
+          if (s.quantity <= 1e-9) sells.shift();
+        }
+        this.updateReferencePrice(good, demand, supply, volume, value);
+        this.history[good] = {
+          volume,
+          price: this.referencePrices[good],
+          demand,
+          supply,
+          unsold: sells.reduce((sum, order) => sum + order.quantity, 0.0),
+          unmet: buys.reduce((sum, order) => sum + order.quantity, 0.0),
+        };
+      }
+      this.clear();
+      return transactions;
+    }
+    updateReferencePrice(good, demand, supply, volume, value) {
+      const old = this.referencePrices[good];
+      let next;
+      if (volume > 1e-9) next = 0.7 * old + 0.3 * (value / volume);
+      else next = old;
+      let imbalance = (demand - supply) / Math.max(demand, supply, 1.0);
+      imbalance = clamp(imbalance, -1.0, 1.0);
+      next *= 1.0 + PRICE_STEP * imbalance;
+      if (demand > 1e-9 && supply <= 1e-9) next *= 1.0 + PRICE_STEP;
+      else if (supply > 1e-9 && demand <= 1e-9) next *= 1.0 - PRICE_STEP;
+      if (this.floors[good] !== undefined) next = Math.max(next, this.floors[good]);
+      if (this.ceilings[good] !== undefined) next = Math.min(next, this.ceilings[good]);
+      this.referencePrices[good] = Math.max(PRICE_FLOOR, next);
+    }
+    receiveGood(agent, good, quantity) {
+      if (agent instanceof Worker || agent instanceof Capitalist) {
+        if (good === "food") agent.food += quantity;
+        else if (good === "cloth") agent.cloth += quantity;
+        else if (good === "building") agent.housing += quantity;
+        return;
+      }
+      if (agent instanceof Enterprise || agent instanceof InvestmentProject) {
+        agent.inventory[good] = (agent.inventory[good] || 0.0) + quantity;
+      }
+    }
+    deliverGood(agent, good, quantity) {
+      if (agent instanceof Enterprise) {
+        agent.inventory[good] = Math.max(0.0, (agent.inventory[good] || 0.0) - quantity);
+      }
+    }
+  }
+
+  // 为了 isinstance 语义，给 Worker/Capitalist/Enterprise/InvestmentProject 定义类。
+  class Worker {
+    constructor(fields) { Object.assign(this, fields); }
+  }
+  class Capitalist {
+    constructor(fields) { Object.assign(this, fields); }
+  }
+  class Enterprise {
+    constructor(fields) { Object.assign(this, fields); }
+  }
+  class InvestmentProject {
+    constructor(fields) { Object.assign(this, fields); }
+  }
+
+  // 把普通对象工厂升级为类实例。为了保持字段初始化可读，统一在创建后包装。
+  function wrapWorker(fields) { return new Worker(fields); }
+  function wrapEnterprise(fields) { return new Enterprise(fields); }
+  function wrapCapitalist(fields) { return new Capitalist(fields); }
+  function wrapProject(fields) { return new InvestmentProject(fields); }
+
+  // ------------------------------------------------------------------
+  // 土地市场
+  // ------------------------------------------------------------------
+  function runLandMarket(engine) {
+    const land = engine.land;
+    if (land.totalLand <= 0) return;
+    const demand = [];
+    for (const ent of engine.enterprises.values()) {
+      if (!ent.active || ent.industry !== "agriculture") continue;
+      if (ent.isHousehold || !ent.modernizationCapable) continue;
+      if (ent.land >= TARGET_CAPITALIST_FARM_MU) continue;
+      const choice = bestEquipmentChoice(engine, "agriculture");
+      const roi = choice ? choice[1] : -1.0;
+      if (roi < INVESTMENT_HURDLE) continue;
+      const want = Math.min(TARGET_CAPITALIST_FARM_MU - ent.land, 50.0);
+      const owner = engine.capitalists.get(ent.ownerId);
+      const available = ent.cash + (owner ? owner.cash : 0.0);
+      if (available >= want * land.price * 0.5) demand.push([ent, want, false]);
+    }
+    const agRoi = agriculturalEntryRoi(engine)[1];
+    if (agRoi >= INVESTMENT_HURDLE) {
+      const entrants = [];
+      for (const c of engine.capitalists.values()) {
+        if (c.cash < MIN_CAPITALIST_FARM_MU * land.price) continue;
+        let ownsFarm = false;
+        for (const e of engine.enterprises.values()) {
+          if (e.active && e.ownerId === c.id && e.industry === "agriculture") { ownsFarm = true; break; }
+        }
+        if (!ownsFarm) entrants.push(c);
+      }
+      entrants.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      for (const capitalist of entrants.slice(0, 2)) {
+        demand.push([capitalist, TARGET_CAPITALIST_FARM_MU, true]);
+      }
+    }
+    if (!demand.length) {
+      land.price = Math.max(20.0, land.price * (1.0 - 0.02));
+      return;
+    }
+
+    let supply = 0.0;
+    const sellers = [];
+    if (land.price >= LAND_RESERVATION_PRICE) {
+      let maxSupply = land.smallholderLand * LAND_SALES_PER_TICK;
+      const ownerIds = Array.from(land.owners.keys()).sort();
+      for (const workerId of ownerIds) {
+        if (maxSupply <= 0) break;
+        const mu = land.owners.get(workerId) || 0.0;
+        if (mu <= 0) continue;
+        supply += mu;
+        sellers.push(workerId);
+        maxSupply -= mu;
+      }
+    }
+    const totalDemand = demand.reduce((sum, item) => sum + item[1], 0.0);
+    const traded = Math.min(totalDemand, supply);
+    let remainingSupply = traded;
+    for (let entry of demand) {
+      let buyer = entry[0];
+      const want = entry[1];
+      let isNew = entry[2];
+      if (remainingSupply <= 0) break;
+      let mu = Math.min(want, remainingSupply);
+      if (isNew && mu < MIN_CAPITALIST_FARM_MU) continue;
+      if (mu <= 0) continue;
+      while (mu > 1e-9 && sellers.length) {
+        const sellerId = sellers[0];
+        const sellerMu = land.owners.get(sellerId) || 0.0;
+        if (sellerMu <= 0) { sellers.shift(); continue; }
+        const price = land.price;
+        if (isNew) {
+          const capitalist = buyer;
+          if (capitalist.cash < sellerMu * price) break;
+          capitalist.cash -= sellerMu * price;
+          engine.workers.get(sellerId).cash += sellerMu * price;
+          land.owners.set(sellerId, 0.0);
+          sellers.shift();
+          removeSmallholder(engine, sellerId);
+          createAgriculturalEnterprise(engine, capitalist, sellerMu, price);
+          mu -= sellerMu;
+          remainingSupply -= sellerMu;
+          isNew = false;
+          buyer = null;
+          for (const e of engine.enterprises.values()) {
+            if (e.ownerId === capitalist.id && e.industry === "agriculture" && e.active) {
+              buyer = e;
+              break;
+            }
+          }
+        } else {
+          const ent = buyer;
+          const owner = engine.capitalists.get(ent.ownerId);
+          const payerCash = owner ? owner.cash : ent.cash;
+          if (payerCash < sellerMu * price) break;
+          if (owner) owner.cash -= sellerMu * price;
+          else ent.cash -= sellerMu * price;
+          engine.workers.get(sellerId).cash += sellerMu * price;
+          ent.land += sellerMu;
+          land.owners.set(sellerId, 0.0);
+          sellers.shift();
+          removeSmallholder(engine, sellerId);
+          mu -= sellerMu;
+          remainingSupply -= sellerMu;
+        }
+      }
+    }
+    let imbalance = (totalDemand - supply) / Math.max(totalDemand, supply, 1.0);
+    imbalance = clamp(imbalance, -1.0, 1.0);
+    land.price = Math.max(20.0, land.price * (1.0 + LAND_PRICE_STEP * imbalance));
+  }
+  function removeSmallholder(engine, workerId) {
+    const worker = engine.workers.get(workerId);
+    worker.landOwned = 0.0;
+    worker.isOwnerOperator = false;
+    worker.employerId = null;
+    const entId = engine.land.enterpriseByOwner.get(workerId);
+    engine.land.enterpriseByOwner.delete(workerId);
+    if (!entId) return;
+    const ent = engine.enterprises.get(entId);
+    if (!ent) return;
+    worker.cash += Math.max(0.0, ent.cash);
+    worker.food += Math.max(0.0, inv(ent, SECTOR_PARAMS[ent.industry].output));
+    ent.cash = 0.0;
+    ent.active = false;
+    ent.workers.length = 0;
+  }
+  function createAgriculturalEnterprise(engine, capitalist, landMu, price) {
+    const injection = Math.min(capitalist.cash * 0.5, 20000.0);
+    capitalist.cash -= injection;
+    const ent = wrapEnterprise(createEnterprise(engine.newEnterpriseId(), "agriculture", capitalist.id, injection, landMu, false, true));
+    engine.enterprises.set(ent.id, ent);
+    return ent;
+  }
+
+  // ------------------------------------------------------------------
+  // 引擎
+  // ------------------------------------------------------------------
+  class Engine {
+    constructor(seed) {
+      this.seed = seed === undefined ? 1 : seed;
+      this.rng = new PythonRandom(this.seed);
+      this.tick = 0;
+      this.workers = new Map();
+      this.enterprises = new Map();
+      this.capitalists = new Map();
+      this.projects = new Map();
+      this.market = new Market(INITIAL_PRICES);
+      this.land = {
+        totalLand: TOTAL_LAND_MU,
+        price: INITIAL_LAND_PRICE,
+        owners: new Map(),
+        enterpriseByOwner: new Map(),
+        get smallholderLand() {
+          let sum = 0.0;
+          for (const v of this.owners.values()) sum += v;
+          return sum;
+        },
+        get capitalistLand() {
+          return this.totalLand - this.smallholderLand;
+        },
+      };
+      this.bank = new Bank(BANK_CASH, BANK_INTEREST_RATE);
+      this.stats = [];
+      this.moneyInitial = 0.0;
+      this.deadThisMonth = 0;
+      this.productionMonth = zeros();
+      this.nextWorker = 0;
+      this.nextEnterprise = 0;
+      this.nextProject = 0;
+      this.zeroOutputStreak = {};
+      for (const g of GOOD_ORDER) this.zeroOutputStreak[g] = 0;
+      this.warnings = [];
+      this.supplement = {
+        housingConsumption: 0.0,
+        housingDemand: 0.0,
+        hungryWorkers: 0,
+        housingConsumers: 0,
+      };
+    }
+    newWorkerId() { const id = `W_${this.nextWorker}`; this.nextWorker += 1; return id; }
+    newEnterpriseId() { const id = `E_${this.nextEnterprise}`; this.nextEnterprise += 1; return id; }
+    newProjectId() { const id = `P_${this.nextProject}`; this.nextProject += 1; return id; }
+    workersOf(enterprise) {
+      const out = [];
+      for (const id of enterprise.workers) {
+        const w = this.workers.get(id);
+        if (w && w.alive) out.push(w);
+      }
+      return out;
+    }
+    activeEnterprises(industry) {
+      const out = [];
+      for (const e of this.enterprises.values()) {
+        if (e.active && (industry === undefined || e.industry === industry)) out.push(e);
+      }
+      return out;
+    }
+    averageWage() {
+      let sum = 0.0;
+      let count = 0;
+      for (const w of this.workers.values()) {
+        if (w.alive && w.employerId !== null && w.wage > 0) {
+          sum += w.wage;
+          count += 1;
+        }
+      }
+      return count ? sum / count : WAGE_BASE;
+    }
+    totalMoney() {
+      let total = 0.0;
+      for (const w of this.workers.values()) if (w.alive) total += w.cash;
+      for (const c of this.capitalists.values()) total += c.cash;
+      for (const e of this.enterprises.values()) if (e.active) total += e.cash;
+      for (const p of this.projects.values()) if (p.active) total += p.cash;
+      total += this.bank.cash;
+      return total;
+    }
+    createWorker(industry, skill, cash, food) {
+      const worker = wrapWorker(createWorker(this.newWorkerId(), industry,
+        skill === undefined ? 1.0 : skill,
+        cash === undefined ? 0.0 : cash,
+        food === undefined ? FOOD_PER_WORKER : food));
+      this.workers.set(worker.id, worker);
+      return worker;
+    }
+    createEnterprise(industry, ownerId, cash, land, isHousehold, modernizationCapable) {
+      const ent = wrapEnterprise(createEnterprise(this.newEnterpriseId(), industry, ownerId,
+        cash || 0.0, land || 0.0, !!isHousehold,
+        modernizationCapable === undefined ? true : modernizationCapable));
+      this.enterprises.set(ent.id, ent);
+      return ent;
+    }
+    enterpriseOwner(enterprise) {
+      return this.capitalists.get(enterprise.ownerId) || this.workers.get(enterprise.ownerId) || null;
+    }
+    startProject(enterprise, equipmentKey, isNew, priority) {
+      let activeProjects = 0;
+      for (const p of this.projects.values()) if (p.active) activeProjects += 1;
+      if (!priority && activeProjects >= MAX_ACTIVE_PROJECTS) return false;
+      const et = EQUIPMENT[equipmentKey];
+      const needed = new Map();
+      if (et.capitalGood !== null && et.capitalCost > 0) needed.set(et.capitalGood, et.capitalCost);
+      if (et.buildingCost > 0) needed.set("building", et.buildingCost);
+      if (!needed.size) return false;
+      let estimate = 0.0;
+      for (const [good, qty] of needed) {
+        estimate += qty * (this.market.referencePrices[good] === undefined ? 1.0 : this.market.referencePrices[good]);
+      }
+      const workers = this.workersOf(enterprise);
+      let wageBill = 0.0;
+      for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+      const reserve = Math.max(wageBill * 3.0, 100.0);
+      if (enterprise.cash < estimate * 1.10 + reserve) return false;
+      const available = enterprise.cash - reserve;
+      const projectCash = Math.min(available, estimate * 1.25);
+      if (projectCash < estimate * 0.90) return false;
+      enterprise.cash -= projectCash;
+      const project = wrapProject(createProject(this.newProjectId(), enterprise.industry, enterprise.id,
+        equipmentKey, needed, projectCash, this.tick, et.buildMonths, !!isNew));
+      this.projects.set(project.id, project);
+      enterprise.lastInvestTick = this.tick;
+      return true;
+    }
+
+    step() {
+      this.tick += 1;
+      this.deadThisMonth = 0;
+      this.warnings = [];
+      this.productionMonth = zeros();
+      this.supplement = { housingConsumption: 0.0, housingDemand: 0.0, hungryWorkers: 0, housingConsumers: 0 };
+      for (const enterprise of this.enterprises.values()) resetMonthFlows(enterprise);
+
+      this.updateSkills();
+      this.runLaborMarket();
+      this.payWages();
+      this.produceAll();
+      this.updatePriceBands();
+      runLandMarket(this);
+      this.investmentDecisions();
+
+      this.submitSellOrders();
+      this.submitHouseholdOrders();
+      this.submitInputOrders();
+      this.submitProjectOrders();
+
+      this.market.match();
+      for (const enterprise of this.enterprises.values()) {
+        if (enterprise.active) {
+          const out = SECTOR_PARAMS[enterprise.industry].output;
+          const sold = enterprise.lastSales[out] || 0.0;
+          enterprise.smoothedSales = 0.7 * enterprise.smoothedSales + 0.3 * sold;
+        }
+      }
+
+      this.progressProjects();
+      this.finance();
+      this.consumeAndDemographics();
+      const stat = this.recordStats();
+      this.market.consumptionSpending = 0.0;
+      this.market.investmentSpending = 0.0;
+      return stat;
+    }
+
+    updateSkills() {
+      for (const worker of this.workers.values()) {
+        if (!worker.alive || worker.employerId === null) continue;
+        worker.skill = Math.min(SKILL_MAX, worker.skill + SKILL_GROWTH_PER_MONTH);
+      }
+    }
+
+    runLaborMarket() {
+      const prices = this.market.referencePrices;
+      const floor = wageFloor(prices);
+      const vacancies = {};
+      const offers = {};
+      for (const enterprise of this.activeEnterprises()) {
+        let workers = this.workersOf(enterprise);
+        const required = desiredWorkers(enterprise);
+        let effective = 0.0;
+        for (const w of workers) effective += workerEffectiveLabor(w);
+        let target;
+        if (required <= 0) target = 0;
+        else if (effective + 1e-9 < required) target = workers.length + Math.ceil((required - effective) / 0.75);
+        else if (effective > required * 1.5) target = Math.max(required, Math.ceil(required / 0.75));
+        else target = workers.length;
+        if (enterprise.industry === "agriculture" && enterprise.isHousehold) target = Math.max(1, target);
+
+        if (workers.length > target) {
+          const removable = workers
+            .slice()
+            .sort((a, b) => (Number(a.isOwnerOperator) - Number(b.isOwnerOperator)) || (a.skill - b.skill))
+            .filter((w) => !w.isOwnerOperator);
+          const excess = workers.length - target;
+          for (const worker of removable.slice(0, excess)) {
+            worker.employerId = null;
+            worker.wage = 0.0;
+            const idx = enterprise.workers.indexOf(worker.id);
+            if (idx >= 0) enterprise.workers.splice(idx, 1);
+          }
+          workers = this.workersOf(enterprise);
+        }
+        const offer = enterpriseWageOffer(this, enterprise);
+        offers[enterprise.id] = offer;
+        for (const worker of workers) {
+          worker.wage = offer;
+          worker.hours = chooseHours(worker, prices);
+          worker.industry = enterprise.industry;
+        }
+        vacancies[enterprise.id] = Math.max(0, target - workers.length);
+      }
+
+      const unemployed = [];
+      for (const w of this.workers.values()) {
+        if (w.alive && w.employerId === null && !w.isOwnerOperator) unemployed.push(w);
+      }
+      unemployed.sort((a, b) => (a.cash - b.cash) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      let hiring = [];
+      for (const eid of Object.keys(vacancies)) {
+        if (vacancies[eid] > 0) hiring.push(eid);
+      }
+      hiring.sort((a, b) => offers[b] - offers[a]);
+      for (const enterpriseId of hiring) {
+        const enterprise = this.enterprises.get(enterpriseId);
+        let remaining = vacancies[enterpriseId];
+        for (const worker of unemployed.slice()) {
+          if (remaining <= 0) break;
+          const reservation = floor * (worker.cash < 5.0 ? 0.70 : 1.0);
+          if (offers[enterpriseId] + 1e-9 < reservation) continue;
+          this.hire(enterprise, worker, offers[enterpriseId], prices);
+          unemployed.splice(unemployed.indexOf(worker), 1);
+          remaining -= 1;
+        }
+        vacancies[enterpriseId] = remaining;
+      }
+
+      hiring = [];
+      for (const eid of Object.keys(vacancies)) {
+        if (vacancies[eid] > 0) hiring.push(eid);
+      }
+      hiring.sort((a, b) => offers[b] - offers[a]);
+      let switches = 0;
+      if (hiring.length) {
+        for (const worker of this.workers.values()) {
+          if (switches >= MAX_HIRES_PER_ENTERPRISE_PER_MONTH || !hiring.length) break;
+          if (!worker.alive || worker.employerId === null || worker.isOwnerOperator) continue;
+          const bestId = hiring[0];
+          const bestOffer = offers[bestId];
+          if (worker.wage + 1e-9 >= bestOffer * (1.0 + WAGE_SWITCH_THRESHOLD)) continue;
+          const oldEnterprise = this.enterprises.get(worker.employerId);
+          if (!oldEnterprise) continue;
+          if (oldEnterprise.id === bestId) continue;
+          const idx = oldEnterprise.workers.indexOf(worker.id);
+          if (idx >= 0) oldEnterprise.workers.splice(idx, 1);
+          this.hire(this.enterprises.get(bestId), worker, bestOffer, prices);
+          vacancies[bestId] -= 1;
+          switches += 1;
+          if (vacancies[bestId] <= 0) {
+            hiring.shift();
+          }
+        }
+      }
+    }
+
+    hire(enterprise, worker, offer, prices) {
+      if (worker.industry !== enterprise.industry) worker.skill = Math.max(1.0, worker.skill * 0.75);
+      worker.industry = enterprise.industry;
+      worker.employerId = enterprise.id;
+      worker.wage = offer;
+      worker.hours = chooseHours(worker, prices);
+      if (!enterprise.workers.includes(worker.id)) enterprise.workers.push(worker.id);
+    }
+
+    payWages() {
+      for (const enterprise of this.activeEnterprises()) {
+        const workers = this.workersOf(enterprise);
+        let bill = 0.0;
+        for (const w of workers) bill += w.wage * workerEffectiveLabor(w);
+        if (bill <= 1e-9) continue;
+        if (enterprise.cash < bill) {
+          const owner = this.enterpriseOwner(enterprise);
+          if (owner && owner.cash > 0) {
+            const injection = Math.min(bill - enterprise.cash, owner.cash);
+            owner.cash -= injection;
+            enterprise.cash += injection;
+          }
+        }
+        if (enterprise.cash < bill) this.bank.lend(enterprise, bill - enterprise.cash);
+        let factor = 1.0;
+        if (enterprise.cash < bill) factor = Math.max(0.0, enterprise.cash / bill);
+        for (const worker of workers) {
+          const paid = worker.wage * workerEffectiveLabor(worker) * factor;
+          enterprise.cash -= paid;
+          worker.cash += paid;
+          enterprise.monthWages += paid;
+        }
+      }
+    }
+
+    produceAll() {
+      for (const enterprise of this.activeEnterprises()) {
+        if (enterprise.industry === "agriculture") {
+          enterprise.useFertilizer = wantsFertilizer(this, enterprise);
+        }
+        const output = produce(this, enterprise);
+        const outGood = SECTOR_PARAMS[enterprise.industry].output;
+        this.productionMonth[outGood] += output;
+      }
+    }
+
+    updatePriceBands() {
+      const prices = this.market.referencePrices;
+      const byGood = {};
+      for (const g of GOOD_ORDER) byGood[g] = [];
+      for (const enterprise of this.activeEnterprises()) {
+        const good = SECTOR_PARAMS[enterprise.industry].output;
+        const workers = this.workersOf(enterprise);
+        const cost = unitCost(enterprise, prices, workers, this.land.price);
+        if (cost > 1e-6) byGood[good].push(cost);
+      }
+      for (const good of GOOD_ORDER) {
+        const costs = byGood[good];
+        if (!costs.length) continue;
+        costs.sort((a, b) => a - b);
+        const median = costs[Math.floor(costs.length / 2)];
+        const initial = INITIAL_PRICES[good];
+        this.market.ceilings[good] = Math.max(median * 2.5, initial * 1.5);
+        this.market.floors[good] = Math.max(median * 0.90, initial * 0.60);
+      }
+    }
+
+    investmentDecisions() {
+      let started = 0;
+      const farms = this.activeEnterprises("agriculture")
+        .filter((e) => !e.isHousehold)
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      let farmsStarted = 0;
+      for (const enterprise of farms) {
+        if (started >= MAX_PROJECTS_PER_TICK || farmsStarted >= 2) break;
+        const choice = shouldInvest(this, enterprise);
+        if (choice === null) continue;
+        if (this.startProject(enterprise, choice[0], false, true)) {
+          started += 1;
+          farmsStarted += 1;
+        }
+      }
+
+      const entryCandidates = [];
+      for (const industry of INDUSTRY_ORDER) {
+        if (industry === "agriculture") continue;
+        const params = SECTOR_PARAMS[industry];
+        if (this.activeEnterprises(industry).length >= params.maxFirms) continue;
+        const choice = bestEquipmentChoice(this, industry, 100000.0);
+        if (choice === null) continue;
+        if (choice[1] >= INVESTMENT_HURDLE) entryCandidates.push([choice[1], industry, choice[0]]);
+      }
+      entryCandidates.sort((a, b) => {
+        if (a[0] !== b[0]) return b[0] - a[0];
+        if (a[1] !== b[1]) return a[1] < b[1] ? 1 : -1;
+        return a[2] < b[2] ? 1 : a[2] > b[2] ? -1 : 0;
+      });
+      if (entryCandidates.length && started < MAX_PROJECTS_PER_TICK) {
+        const noFertilizer = this.activeEnterprises("fertilizer_factory").length === 0;
+        let preferred = null;
+        if (noFertilizer) {
+          preferred = entryCandidates.find((c) => c[1] === "fertilizer_factory") || null;
+        }
+        const choice = preferred || entryCandidates[0];
+        const industry = choice[1];
+        const key = choice[2];
+        const cost = equipmentCost(key, this.market.referencePrices);
+        const ownedCounts = new Map();
+        for (const e of this.enterprises.values()) {
+          if (e.active) ownedCounts.set(e.ownerId, (ownedCounts.get(e.ownerId) || 0) + 1);
+        }
+        const candidates = Array.from(this.capitalists.values())
+          .filter((c) => c.cash >= cost + 2000.0);
+        candidates.sort((a, b) => {
+          const ao = ownedCounts.get(a.id) || 0;
+          const bo = ownedCounts.get(b.id) || 0;
+          if (ao !== bo) return ao - bo;
+          if (a.cash !== b.cash) return b.cash - a.cash;
+          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        });
+        if (candidates.length) {
+          const owner = candidates[0];
+          const budget = Math.min(owner.cash * 0.5, cost * 2.0 + 3000.0);
+          if (budget >= cost + 1000.0) {
+            owner.cash -= budget;
+            const enterprise = this.createEnterprise(industry, owner.id, budget, 0, false, true);
+            if (this.startProject(enterprise, key, true, false)) started += 1;
+            else {
+              enterprise.active = false;
+              owner.cash += enterprise.cash;
+              enterprise.cash = 0.0;
+            }
+          }
+        }
+      }
+
+      const priority = {
+        machinery_factory: 0, steel_mill: 1, brick_factory: 2, construction: 3,
+        fertilizer_factory: 4, textile_mill: 5, coal_mine: 6, iron_mine: 7,
+      };
+      const existing = this.activeEnterprises().slice().sort((a, b) => {
+        const pa = priority[a.industry] === undefined ? 99 : priority[a.industry];
+        const pb = priority[b.industry] === undefined ? 99 : priority[b.industry];
+        if (pa !== pb) return pa - pb;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+      for (const enterprise of existing) {
+        if (started >= MAX_PROJECTS_PER_TICK) break;
+        if (enterprise.industry === "agriculture") continue;
+        const choice = shouldInvest(this, enterprise);
+        if (choice === null) continue;
+        if (this.startProject(enterprise, choice[0], false, false)) started += 1;
+      }
+    }
+    ownedCount(capitalist) {
+      let count = 0;
+      for (const e of this.enterprises.values()) {
+        if (e.ownerId === capitalist.id && e.active) count += 1;
+      }
+      return count;
+    }
+
+    submitSellOrders() {
+      for (const enterprise of this.activeEnterprises()) {
+        const params = SECTOR_PARAMS[enterprise.industry];
+        const quantity = inv(enterprise, params.output);
+        if (quantity <= 1e-9) continue;
+        const ask = enterpriseAskPrice(this, enterprise);
+        enterprise.askPrices[params.output] = ask;
+        this.market.submitSell(enterprise, params.output, quantity, ask);
+      }
+    }
+
+    submitHouseholdOrders() {
+      const prices = this.market.referencePrices;
+      for (const worker of this.workers.values()) {
+        if (!worker.alive) continue;
+        const comfort = worker.livingStandard === "comfort" || worker.livingStandard === "leisure";
+        const mult = comfort ? COMFORT_MULTIPLIER : 1.0;
+        let cashLeft = Math.max(0.0, worker.cash);
+        const foodGap = Math.max(0.0, FOOD_PER_WORKER * mult - worker.food);
+        if (foodGap > 1e-9 && cashLeft > 0) {
+          let foodMult;
+          if (worker.food < 0.05) foodMult = 1.08;
+          else if (comfort) foodMult = 1.02;
+          else foodMult = 1.05;
+          const bid = prices.food * foodMult;
+          const qty = Math.min(foodGap, cashLeft / Math.max(bid, 1e-9));
+          if (qty > 1e-9) {
+            this.market.submitBuy(worker, "food", qty, bid);
+            cashLeft -= qty * bid;
+          }
+        }
+        const clothGap = Math.max(0.0, CLOTH_PER_WORKER * mult - worker.cloth);
+        if (clothGap > 1e-9 && cashLeft > 0) {
+          const bid = prices.cloth * 1.04;
+          const budget = cashLeft * 0.60;
+          const qty = Math.min(clothGap, budget / Math.max(bid, 1e-9));
+          if (qty > 1e-9) {
+            this.market.submitBuy(worker, "cloth", qty, bid);
+            cashLeft -= qty * bid;
+          }
+        }
+        const housingGap = Math.max(0.0, HOUSING_PER_WORKER * mult - worker.housing);
+        if (housingGap > 1e-9 && cashLeft > 0) {
+          const bid = prices.building * 1.04;
+          const qty = Math.min(housingGap, cashLeft * 0.50 / Math.max(bid, 1e-9));
+          if (qty > 1e-9) this.market.submitBuy(worker, "building", qty, bid);
+        }
+      }
+
+      for (const capitalist of this.capitalists.values()) {
+        let budget = Math.max(CAPITALIST_MIN_CONSUMPTION, capitalist.cash * CAPITALIST_CONSUMPTION_RATE);
+        budget = Math.min(budget, Math.max(0.0, capitalist.cash));
+        let cashLeft = budget;
+        const foodGap = Math.max(0.0, CAPITALIST_FOOD - capitalist.food);
+        if (foodGap > 1e-9 && cashLeft > 0) {
+          const bid = prices.food * 1.04;
+          const qty = Math.min(foodGap, cashLeft / Math.max(bid, 1e-9));
+          if (qty > 1e-9) {
+            this.market.submitBuy(capitalist, "food", qty, bid);
+            cashLeft -= qty * bid;
+          }
+        }
+        const clothGap = Math.max(0.0, CAPITALIST_CLOTH - capitalist.cloth);
+        if (clothGap > 1e-9 && cashLeft > 0) {
+          const bid = prices.cloth * 1.04;
+          const qty = Math.min(clothGap, cashLeft * 0.6 / Math.max(bid, 1e-9));
+          if (qty > 1e-9) {
+            this.market.submitBuy(capitalist, "cloth", qty, bid);
+            cashLeft -= qty * bid;
+          }
+        }
+        const housingGap = Math.max(0.0, CAPITALIST_HOUSING - capitalist.housing);
+        if (housingGap > 1e-9 && cashLeft > 0) {
+          const bid = prices.building * 1.04;
+          const qty = Math.min(housingGap, cashLeft * 0.6 / Math.max(bid, 1e-9));
+          if (qty > 1e-9) this.market.submitBuy(capitalist, "building", qty, bid);
+        }
+      }
+    }
+
+    submitInputOrders() {
+      const prices = this.market.referencePrices;
+      for (const enterprise of this.activeEnterprises()) {
+        const needs = inputNeeds(this, enterprise);
+        if (!Object.keys(needs).length) continue;
+        const workers = this.workersOf(enterprise);
+        let wageBill = 0.0;
+        for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+        const available = Math.max(0.0, enterprise.cash - wageBill * 2.0);
+        if (available <= 1e-9) continue;
+        const orders = [];
+        let total = 0.0;
+        for (const [good, qty] of Object.entries(needs)) {
+          const bid = prices[good] * 1.06;
+          orders.push([good, qty, bid]);
+          total += qty * bid;
+        }
+        const scale = total > 0 ? Math.min(1.0, available / total) : 0.0;
+        for (const [good, qty, bid] of orders) {
+          const q = qty * scale;
+          if (q > 1e-9) this.market.submitBuy(enterprise, good, q, bid);
+        }
+      }
+    }
+
+    submitProjectOrders() {
+      const prices = this.market.referencePrices;
+      for (const project of this.projects.values()) {
+        if (!project.active) continue;
+        const enterprise = this.enterprises.get(project.enterpriseId);
+        if (enterprise && enterprise.active) {
+          const workers = this.workersOf(enterprise);
+          let wageBill = 0.0;
+          for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+          const reserve = Math.max(wageBill * 3.0, 100.0);
+          let remainingValue = 0.0;
+          for (const [good, qty] of project.needed) {
+            remainingValue += projectRemaining(project, good) * (prices[good] || 0.0);
+          }
+          if (project.cash + 1e-9 < remainingValue * 1.05) {
+            const need = remainingValue * 1.15 - project.cash;
+            const transfer = Math.min(need, Math.max(0.0, enterprise.cash - reserve));
+            if (transfer > 0) {
+              enterprise.cash -= transfer;
+              project.cash += transfer;
+            }
+          }
+        }
+        if (project.cash <= 1e-9) continue;
+        for (const [good] of project.needed) {
+          const remaining = projectRemaining(project, good);
+          if (remaining <= 1e-9) continue;
+          const bid = prices[good] * (project.industry === "agriculture" ? 1.10 : 1.08);
+          const qty = Math.min(remaining, project.cash / Math.max(bid, 1e-9));
+          if (qty > 1e-9) this.market.submitBuy(project, good, qty, bid);
+        }
+      }
+    }
+
+    progressProjects() {
+      for (const project of Array.from(this.projects.values())) {
+        if (!project.active) continue;
+        project.age += 1;
+        if (!project.started) {
+          if (fullyPaid(project)) {
+            project.started = true;
+            project.monthsLeft = project.buildMonths;
+            if (project.monthsLeft <= 0) this.completeProject(project);
+          } else if (project.age > PROJECT_TIMEOUT_MONTHS) {
+            this.cancelProject(project);
+          }
+          continue;
+        }
+        project.monthsLeft -= 1;
+        if (project.monthsLeft <= 0) this.completeProject(project);
+      }
+    }
+    completeProject(project) {
+      const enterprise = this.enterprises.get(project.enterpriseId);
+      if (enterprise && enterprise.active) {
+        addEquipment(enterprise, project.equipmentKey, project.quantity);
+        enterprise.active = true;
+        enterprise.cash += project.cash;
+        project.cash = 0.0;
+      } else {
+        this.bank.cash += project.cash;
+        project.cash = 0.0;
+      }
+      project.active = false;
+    }
+    cancelProject(project) {
+      const enterprise = this.enterprises.get(project.enterpriseId);
+      if (enterprise && enterprise.active) {
+        enterprise.cash += project.cash;
+        for (const good of GOOD_ORDER) {
+          enterprise.inventory[good] = inv(enterprise, good) + (project.inventory[good] || 0.0);
+        }
+      } else {
+        this.bank.cash += project.cash;
+      }
+      project.cash = 0.0;
+      project.active = false;
+    }
+
+    finance() {
+      const prices = this.market.referencePrices;
+      for (const enterprise of this.activeEnterprises()) {
+        this.bank.chargeInterest(enterprise);
+        const workers = this.workersOf(enterprise);
+        let wageBill = 0.0;
+        for (const w of workers) wageBill += w.wage * workerEffectiveLabor(w);
+        if (enterprise.cash > wageBill * 6.0 + 100.0) {
+          this.bank.repay(enterprise, (enterprise.cash - wageBill * 3.0) * 0.30);
+        }
+        enterprise.lastRevenue = enterprise.monthRevenue;
+        enterprise.lastCosts = enterprise.monthInputCost;
+        enterprise.lastWages = enterprise.monthWages;
+        enterprise.lastInterest = enterprise.monthInterest;
+        // 缺陷保留：折旧口径使用 capital_value()，土地被错误地计入折旧。
+        const depreciation = capitalValue(enterprise, prices, this.land.price) / DEPRECIATION_MONTHS;
+        enterprise.lastProfit = enterprise.lastRevenue - enterprise.lastCosts
+          - enterprise.lastWages - enterprise.lastInterest - depreciation;
+        if (enterprise.lastProfit > 0 && enterprise.cash > wageBill * 3.0 + 100.0) {
+          const dividend = Math.min(enterprise.lastProfit * DIVIDEND_PAYOUT, enterprise.cash - wageBill * 3.0);
+          if (dividend > 0) {
+            enterprise.cash -= dividend;
+            const owner = this.capitalists.get(enterprise.ownerId);
+            if (owner) owner.cash += dividend;
+            else {
+              const ownerWorker = this.workers.get(enterprise.ownerId);
+              if (ownerWorker && ownerWorker.alive) ownerWorker.cash += dividend;
+              else this.bank.cash += dividend;
+            }
+          }
+        }
+        const worth = netWorth(enterprise, prices, this.land.price);
+        if (enterprise.cash <= 1e-9 && enterprise.lastProfit < 0 && worth < 0) {
+          enterprise.bankruptcyMonths += 1;
+        } else {
+          enterprise.bankruptcyMonths = 0;
+        }
+        if (enterprise.bankruptcyMonths >= 12) this.liquidate(enterprise);
+      }
+    }
+    liquidate(enterprise) {
+      enterprise.active = false;
+      for (const workerId of enterprise.workers.slice()) {
+        const worker = this.workers.get(workerId);
+        if (worker) {
+          worker.employerId = null;
+          worker.wage = 0.0;
+        }
+      }
+      enterprise.workers.length = 0;
+      if (enterprise.cash > 0) {
+        this.bank.cash += enterprise.cash;
+        enterprise.cash = 0.0;
+      }
+    }
+
+    consumeAndDemographics() {
+      for (const worker of this.workers.values()) {
+        if (!worker.alive) continue;
+        const comfort = worker.livingStandard === "comfort" || worker.livingStandard === "leisure";
+        const mult = comfort ? COMFORT_MULTIPLIER : 1.0;
+        const foodTarget = FOOD_PER_WORKER * mult;
+        const clothTarget = CLOTH_PER_WORKER * mult;
+        const housingTarget = HOUSING_PER_WORKER * mult;
+        worker.consumedFood = Math.min(worker.food, foodTarget);
+        worker.food -= worker.consumedFood;
+        worker.consumedCloth = Math.min(worker.cloth, clothTarget);
+        worker.cloth -= worker.consumedCloth;
+        worker.consumedHousing = Math.min(worker.housing, housingTarget);
+        worker.housing -= worker.consumedHousing;
+        this.supplement.housingConsumption += worker.consumedHousing;
+        this.supplement.housingDemand += housingTarget;
+        this.supplement.housingConsumers += 1;
+        if (worker.consumedFood + 1e-9 < FOOD_PER_WORKER) {
+          worker.hungerMonths += 1;
+          this.supplement.hungryWorkers += 1;
+        } else {
+          worker.hungerMonths = 0;
+        }
+        if (worker.hungerMonths >= HUNGER_DEATH_AFTER_MONTHS) {
+          const chance = Math.min(HUNGER_DEATH_CAP, HUNGER_DEATH_BASE + HUNGER_DEATH_STEP * (worker.hungerMonths - HUNGER_DEATH_AFTER_MONTHS));
+          if (this.rng.random() < chance) {
+            worker.alive = false;
+            this.deadThisMonth += 1;
+            this.bank.cash += Math.max(0.0, worker.cash);
+            worker.cash = 0.0;
+            const employer = this.enterprises.get(worker.employerId);
+            if (employer) {
+              const idx = employer.workers.indexOf(worker.id);
+              if (idx >= 0) employer.workers.splice(idx, 1);
+            }
+            worker.employerId = null;
+            continue;
+          }
+        }
+        if (worker.consumedFood + 1e-9 < FOOD_PER_WORKER) worker.livingStandard = "survival";
+        else if (worker.consumedCloth + 1e-9 < CLOTH_PER_WORKER || worker.consumedHousing + 1e-9 < HOUSING_PER_WORKER) {
+          worker.livingStandard = "subsistence";
+        } else if (worker.hours <= 8 && worker.cash >= 120.0) worker.livingStandard = "leisure";
+        else worker.livingStandard = "comfort";
+      }
+      for (const capitalist of this.capitalists.values()) {
+        capitalist.consumedFood = Math.min(capitalist.food, CAPITALIST_FOOD);
+        capitalist.food -= capitalist.consumedFood;
+        capitalist.consumedCloth = Math.min(capitalist.cloth, CAPITALIST_CLOTH);
+        capitalist.cloth -= capitalist.consumedCloth;
+        capitalist.consumedHousing = Math.min(capitalist.housing, CAPITALIST_HOUSING);
+        capitalist.housing -= capitalist.consumedHousing;
+      }
+    }
+
+    recordStats() {
+      const prices = this.market.referencePrices;
+      const aliveWorkers = [];
+      for (const w of this.workers.values()) if (w.alive) aliveWorkers.push(w);
+      const employed = aliveWorkers.filter((w) => w.employerId !== null);
+      const unemployed = aliveWorkers.length - employed.length;
+      const agWorkers = employed.filter((w) => w.industry === "agriculture");
+      const foodOutput = this.productionMonth.food || 0.0;
+      const agProductivity = foodOutput / Math.max(agWorkers.length, 1);
+      let totalCapital = 0.0;
+      let totalProfit = 0.0;
+      const active = this.activeEnterprises();
+      for (const enterprise of active) {
+        totalCapital += capitalValue(enterprise, prices, this.land.price) + inventoryValue(enterprise, prices);
+        totalProfit += enterprise.lastProfit;
+      }
+      const profitRate = totalCapital > 0 ? totalProfit / totalCapital : 0.0;
+      const firmsByIndustry = {};
+      for (const ind of INDUSTRY_ORDER) firmsByIndustry[ind] = this.activeEnterprises(ind).length;
+      const workersByIndustry = {};
+      for (const ind of INDUSTRY_ORDER) workersByIndustry[ind] = 0;
+      for (const worker of aliveWorkers) workersByIndustry[worker.industry] += 1;
+      const living = { survival: 0, subsistence: 0, comfort: 0, leisure: 0 };
+      for (const worker of aliveWorkers) living[worker.livingStandard] += 1;
+      const capitalistFarms = this.activeEnterprises("agriculture").filter((e) => !e.isHousehold);
+      const householdFarms = this.activeEnterprises("agriculture").filter((e) => e.isHousehold);
+      let fertilizerUsed = 0.0;
+      for (const e of this.activeEnterprises("agriculture")) fertilizerUsed += e.lastInputUsed.fertilizer || 0.0;
+      let farmMachinery = 0;
+      for (const e of this.activeEnterprises("agriculture")) {
+        for (const [k, v] of e.equipment) if (k.startsWith("farm_")) farmMachinery += v;
+      }
+      const moneyTotal = this.totalMoney();
+      if (this.moneyInitial > 0 && Math.abs(moneyTotal - this.moneyInitial) > 0.01) {
+        this.warnings.push(`货币漂移：${moneyTotal.toFixed(2)} != ${this.moneyInitial.toFixed(2)}`);
+      }
+      const zeroStreak = {};
+      for (const good of GOOD_ORDER) {
+        const price = prices[good];
+        const initial = INITIAL_PRICES[good];
+        if (price > initial * 10) this.warnings.push(`${GOOD_LABELS[good]} 价格高于初始价的 10 倍`);
+        if (price < initial * 0.1) this.warnings.push(`${GOOD_LABELS[good]} 价格低于初始价的 0.1 倍`);
+        const output = this.productionMonth[good] || 0.0;
+        if (output <= 1e-9) this.zeroOutputStreak[good] += 1;
+        else this.zeroOutputStreak[good] = 0;
+        if (this.zeroOutputStreak[good] === 3) this.warnings.push(`${GOOD_LABELS[good]} 连续 3 个月产量为 0`);
+        zeroStreak[good] = this.zeroOutputStreak[good];
+      }
+      const gdp = this.market.consumptionSpending + this.market.investmentSpending;
+      const projectCounts = {};
+      for (const ind of INDUSTRY_ORDER) projectCounts[ind] = 0;
+      let activeProjects = 0;
+      let projectCash = 0.0;
+      for (const project of this.projects.values()) {
+        if (!project.active) continue;
+        activeProjects += 1;
+        projectCounts[project.industry] += 1;
+        projectCash += project.cash;
+      }
+      const consumption = this.market.consumptionSpending;
+      const investment = this.market.investmentSpending;
+      const stat = {
+        tick: this.tick,
+        alive: aliveWorkers.length,
+        dead_this_month: this.deadThisMonth,
+        employed_workers: employed.length,
+        ag_employed: agWorkers.length,
+        non_ag_employed: employed.length - agWorkers.length,
+        money_total: moneyTotal,
+        bank_cash: this.bank.cash,
+        bank_loans: sumBankLoans(this.bank),
+        gdp,
+        consumption,
+        investment,
+        unemployment_rate: unemployed / Math.max(aliveWorkers.length, 1),
+        profit_rate: profitRate,
+        capital_stock: totalCapital,
+        ag_productivity: agProductivity,
+        food_output: foodOutput,
+        prices: Object.assign({}, prices),
+        production: Object.assign({}, this.productionMonth),
+        volumes: mapHistory(this.market, "volume"),
+        demand: mapHistory(this.market, "demand"),
+        supply: mapHistory(this.market, "supply"),
+        firms: firmsByIndustry,
+        workers_by_industry: workersByIndustry,
+        living_standard: living,
+        capitalist_farms: capitalistFarms.length,
+        household_farms: householdFarms.length,
+        fertilizer_used: fertilizerUsed,
+        farm_machinery: farmMachinery,
+        smallholder_land: this.land.smallholderLand,
+        land_price: this.land.price,
+        warnings: this.warnings.slice(),
+        zero_output_streak: zeroStreak,
+        active_projects: activeProjects,
+        project_by_industry: projectCounts,
+        project_cash: projectCash,
+        housing_consumption: this.supplement.housingConsumption,
+        housing_demand: this.supplement.housingDemand,
+        housing_satisfaction: this.supplement.housingDemand > 0 ? this.supplement.housingConsumption / this.supplement.housingDemand : 1.0,
+        hungry_workers: this.supplement.hungryWorkers,
+      };
+      stat.map = buildMapSnapshot(this, stat);
+      this.stats.push(stat);
+      return stat;
+    }
+  }
+  function sumBankLoans(bank) {
+    let sum = 0.0;
+    for (const v of bank.loans.values()) sum += v;
+    return sum;
+  }
+  function mapHistory(market, field) {
+    const out = {};
+    for (const good of GOOD_ORDER) out[good] = market.history[good][field];
+    return out;
+  }
+
+  // ------------------------------------------------------------------
+  // 场景 1
+  // ------------------------------------------------------------------
+  function buildScenario1(engine) {
+    for (let i = 0; i < 50; i++) {
+      engine.capitalists.set(`C_${i}`, wrapCapitalist(createCapitalist(`C_${i}`, 100000.0, "director")));
+    }
+    for (let i = 50; i < 100; i++) {
+      engine.capitalists.set(`C_${i}`, wrapCapitalist(createCapitalist(`C_${i}`, 10000.0, "manager")));
+    }
+    const ownerIds = Array.from(engine.capitalists.keys());
+    let ownerCursor = 0;
+
+    for (let i = 0; i < 600; i++) {
+      const worker = engine.createWorker("agriculture", 2.0, 20.0, 0.0);
+      const enterprise = engine.createEnterprise("agriculture", worker.id, 100.0, 10.0, true, false);
+      worker.employerId = enterprise.id;
+      worker.wage = WAGE_BASE;
+      worker.isOwnerOperator = true;
+      worker.landOwned = 10.0;
+      enterprise.workers.push(worker.id);
+      engine.land.owners.set(worker.id, 10.0);
+      engine.land.enterpriseByOwner.set(worker.id, enterprise.id);
+    }
+
+    function addIndustry(industry, enterpriseCount, workersPerEnterprise, equipment, extraWorkers) {
+      extraWorkers = extraWorkers || 0;
+      for (let index = 0; index < enterpriseCount; index++) {
+        const owner = engine.capitalists.get(ownerIds[ownerCursor % ownerIds.length]);
+        ownerCursor += 1;
+        const enterprise = engine.createEnterprise(industry, owner.id, 5000.0, 0, false, true);
+        for (const [key, count] of Object.entries(equipment)) {
+          for (let n = 0; n < count; n++) addEquipment(enterprise, key, 1);
+        }
+        const workerCount = workersPerEnterprise + (index < extraWorkers ? 1 : 0);
+        for (let w = 0; w < workerCount; w++) {
+          const worker = engine.createWorker(industry, 2.0, 20.0, 0.0);
+          worker.employerId = enterprise.id;
+          worker.wage = WAGE_BASE;
+          enterprise.workers.push(worker.id);
+        }
+        seedInputs(engine, enterprise);
+      }
+    }
+    addIndustry("coal_mine", 20, 10, { coal_t0: 1 });
+    addIndustry("iron_mine", 8, 10, { iron_t0: 1 });
+    addIndustry("steel_mill", 3, 4, { steel_t0: 1 });
+    addIndustry("brick_factory", 1, 50, { brick_t0: 1 });
+    addIndustry("textile_mill", 1, 20, { textile_t0: 20 });
+    addIndustry("machinery_factory", 1, 10, { machinery_t0: 1 });
+    addIndustry("construction", 5, 25, { construction_t0: 1 }, 3);
+
+    engine.land.totalLand = TOTAL_LAND_MU;
+    engine.market.referencePrices = Object.assign({}, INITIAL_PRICES);
+    engine.moneyInitial = engine.totalMoney();
+    return engine;
+  }
+  function seedInputs(engine, enterprise) {
+    const params = SECTOR_PARAMS[enterprise.industry];
+    if (!Object.keys(params.inputs).length) return;
+    const capacity = equipmentSummary(enterprise)[0];
+    const output = capacity * 2.0;
+    for (const [good, ratio] of Object.entries(params.inputs)) {
+      enterprise.inventory[good] = Math.max(inv(enterprise, good), output * ratio);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 地图快照：与统计同月生成，UI 不重新计算经济逻辑。
+  // ------------------------------------------------------------------
+  const TILE_BY_INDUSTRY = {
+    agriculture: "agriculture", coal_mine: "mine", iron_mine: "mine",
+    steel_mill: "steel", brick_factory: "brick", textile_mill: "city",
+    machinery_factory: "machinery", construction: "city", fertilizer_factory: "fertilizer",
+  };
+  const SHORT_FACTORY_LABEL = {
+    steel_mill: "炼钢厂", brick_factory: "砖厂", textile_mill: "纺织厂",
+    machinery_factory: "机械厂", construction: "施工队", fertilizer_factory: "化肥厂",
+  };
+  function tierOfKey(key) {
+    const m = /_t(\d+)$/.exec(key);
+    return m ? Number(m[1]) : -1;
+  }
+  function buildMapSnapshot(engine, stat) {
+    const tiles = { city: [], machinery: [], steel: [], agriculture: [], mine: [], fertilizer: [], brick: [] };
+    const nonResourceGroups = new Map();
+    const resource = {
+      agriculture: { industry: "agriculture", label: "农机", units: 0, tiers: new Map(), firms: 0, employees: 0, output: 0, cash: 0, households: 0, capitalists: 0 },
+      coal_mine: { industry: "coal_mine", label: "煤矿设备", units: 0, tiers: new Map(), firms: 0, employees: 0, output: 0, cash: 0 },
+      iron_mine: { industry: "iron_mine", label: "铁矿设备", units: 0, tiers: new Map(), firms: 0, employees: 0, output: 0, cash: 0 },
+    };
+    for (const e of engine.activeEnterprises()) {
+      const workers = engine.workersOf(e).length;
+      const out = SECTOR_PARAMS[e.industry].output;
+      if (e.industry === "agriculture" || e.industry === "coal_mine" || e.industry === "iron_mine") {
+        const r = resource[e.industry];
+        r.firms += 1;
+        r.employees += workers;
+        r.output += e.lastOutput;
+        r.cash += e.cash;
+        if (e.industry === "agriculture") {
+          if (e.isHousehold) r.households += 1;
+          else r.capitalists += 1;
+        }
+        for (const [key, count] of e.equipment) {
+          if (count <= 0) continue;
+          const tier = tierOfKey(key);
+          r.units += count;
+          r.tiers.set(tier, (r.tiers.get(tier) || 0) + count);
+        }
+        continue;
+      }
+      let primaryTier = -1;
+      const breakdown = new Map();
+      for (const [key, count] of e.equipment) {
+        if (count <= 0) continue;
+        const tier = tierOfKey(key);
+        primaryTier = Math.max(primaryTier, tier);
+        breakdown.set(tier, (breakdown.get(tier) || 0) + count);
+      }
+      const groupKey = `${e.industry}|${primaryTier}`;
+      let group = nonResourceGroups.get(groupKey);
+      if (!group) {
+        group = {
+          kind: "factory", industry: e.industry, tile: TILE_BY_INDUSTRY[e.industry],
+          label: SHORT_FACTORY_LABEL[e.industry], tier: primaryTier,
+          count: 0, employees: 0, output: 0, cash: 0, equipment: 0,
+          tiers: new Map(),
+        };
+        nonResourceGroups.set(groupKey, group);
+      }
+      group.count += 1;
+      group.employees += workers;
+      group.output += e.lastOutput;
+      group.cash += e.cash;
+      group.equipment += totalEquipment(e);
+      for (const [tier, count] of breakdown) group.tiers.set(tier, (group.tiers.get(tier) || 0) + count);
+      group.outputGood = out;
+    }
+    for (const group of nonResourceGroups.values()) {
+      group.tierBreakdown = Array.from(group.tiers.entries()).sort((a, b) => a[0] - b[0]);
+      delete group.tiers;
+      if (group.tile) tiles[group.tile].push(group);
+    }
+    const ag = resource.agriculture;
+    ag.tierBreakdown = Array.from(ag.tiers.entries()).sort((a, b) => a[0] - b[0]);
+    ag.outputGood = "food";
+    ag.fertilizer = stat.fertilizer_used;
+    delete ag.tiers;
+    ag.tiers = ag.tierBreakdown;
+    ag.kind = "equipment";
+    ag.tile = "agriculture";
+    tiles.agriculture.push(ag);
+    for (const key of ["coal_mine", "iron_mine"]) {
+      const r = resource[key];
+      r.tierBreakdown = Array.from(r.tiers.entries()).sort((a, b) => a[0] - b[0]);
+      r.outputGood = SECTOR_PARAMS[key].output;
+      delete r.tiers;
+      r.tiers = r.tierBreakdown;
+      r.kind = "equipment";
+      r.tile = "mine";
+      tiles.mine.push(r);
+    }
+    tiles.city.push({
+      kind: "housing",
+      tile: "city",
+      label: "住房",
+      residents: stat.alive,
+      consumption: stat.housing_consumption,
+      demand: stat.housing_demand,
+      satisfaction: stat.housing_satisfaction,
+      price: stat.prices.building,
+    });
+    for (const key of Object.keys(tiles)) {
+      tiles[key].sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === "housing" ? -1 : b.kind === "housing" ? 1 : 0;
+        if (a.industry !== b.industry) return a.industry < b.industry ? -1 : 1;
+        return b.tier - a.tier;
+      });
+    }
+    return { tick: stat.tick, tiles };
+  }
+
+  function chooseHours(worker, prices) {
+    const basket = FOOD_PER_WORKER * (prices.food === undefined ? 100.0 : prices.food)
+      + (prices.cloth === undefined ? 1.0 : prices.cloth)
+      + 0.2 * (prices.building === undefined ? 10.0 : prices.building);
+    let current;
+    if (HOURS_OPTIONS.includes(worker.hours)) current = worker.hours;
+    else current = DEFAULT_HOURS;
+    if (worker.food + 1e-9 < 0.10 || worker.livingStandard === "survival" || worker.livingStandard === "subsistence") {
+      return 16;
+    }
+    if (worker.cash >= LEISURE_SAVINGS && current > 8) return 8;
+    if (worker.cash >= COMFORT_SAVINGS && current > 12) return 12;
+    if (worker.cash < basket * 2.0 && current !== 16) return 16;
+    return current;
+  }
+
+  // ------------------------------------------------------------------
+  // 对外接口
+  // ------------------------------------------------------------------
+  globalThis.Ecosim = {
+    Engine,
+    buildScenario1,
+    GOOD_ORDER,
+    INDUSTRY_ORDER,
+    GOOD_LABELS,
+    GOOD_UNITS,
+    INDUSTRY_LABELS,
+    INITIAL_PRICES,
+    EQUIPMENT,
+    SECTOR_PARAMS,
+    roundToEven,
+  };
+})();
+/* 引擎结束 */
+
+  </script>
+
+  <script>
+    (function () {
+      "use strict";
+      const E = window.Ecosim;
+      if (!E) {
+        if (window.__showEcosimError) window.__showEcosimError("引擎脚本未加载。");
+        return;
+      }
+
+      // ------------------------------------------------------------------
+      // 基础状态
+      // ------------------------------------------------------------------
+      const state = {
+        engine: null,
+        stats: [],
+        months: 0,
+        seed: 1,
+        selected: 0,
+        domains: {},
+        detailDomain: null,
+        elapsedMs: 0,
+        mode: "fast",
+        intervalMs: 300,
+        running: false,
+        paused: false,
+        completed: false,
+        playTimer: null,
+        playToken: 0,
+        playResolve: null,
+        playBegan: 0,
+        playComputeMs: 0,
+        scheduleNext: null,
+      };
+      const $ = (id) => document.getElementById(id);
+      const startScreen = $("start-screen");
+      const app = $("app");
+      const startButton = $("start-btn");
+      const startError = $("start-error");
+      const monthSlider = $("month-slider");
+      const timelineLabel = $("timeline-label");
+      const tooltip = $("tooltip");
+      const svg = $("map");
+      const NS = "http://www.w3.org/2000/svg";
+      let selectedMonths = 240;
+      let selectedMode = "fast";
+      let selectedInterval = 300;
+      let renderQueued = false;
+
+      const GOODS = E.GOOD_ORDER;
+      const INDUSTRIES = E.INDUSTRY_ORDER;
+      const GOOD_LABELS = E.GOOD_LABELS;
+      const GOOD_UNITS = E.GOOD_UNITS;
+      const INDUSTRY_LABELS = E.INDUSTRY_LABELS;
+      const SECTOR_PARAMS = E.SECTOR_PARAMS;
+
+      const INDUSTRY_COLORS = {
+        agriculture: "var(--machinery)",
+        coal_mine: "var(--steel)",
+        iron_mine: "#9b7c5a",
+        steel_mill: "var(--steel)",
+        brick_factory: "var(--brick)",
+        textile_mill: "var(--textile)",
+        machinery_factory: "var(--machinery)",
+        construction: "var(--construction)",
+        fertilizer_factory: "var(--fertilizer)",
+      };
+
+      // ------------------------------------------------------------------
+      // 数字格式化
+      // ------------------------------------------------------------------
+      function formatNumber(value, digits) {
+        if (!Number.isFinite(Number(value))) return "—";
+        const d = digits === undefined ? 1 : digits;
+        const number = Number(value);
+        const negative = number < 0;
+        const fixed = Math.abs(number).toFixed(d);
+        const parts = fixed.split(".");
+        parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        return (negative ? "-" : "") + parts.join(".");
+      }
+      function formatInt(value) { return formatNumber(value, 0); }
+      function formatPercent(value, digits) {
+        if (!Number.isFinite(Number(value))) return "—";
+        const d = digits === undefined ? 2 : digits;
+        return (Number(value) * 100).toFixed(d) + "%";
+      }
+      function formatMoneyCompact(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "—";
+        if (Math.abs(n) >= 1e8) return formatNumber(n / 1e8, 2) + " 亿";
+        if (Math.abs(n) >= 1e4) return formatNumber(n / 1e4, 2) + " 万";
+        return formatNumber(n, 0);
+      }
+      function formatPrice(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "—";
+        if (Math.abs(n) >= 100) return formatNumber(n, 1);
+        if (Math.abs(n) >= 1) return formatNumber(n, 2);
+        return formatNumber(n, 3);
+      }
+      function shortValue(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "—";
+        if (Math.abs(n) >= 10000) return formatMoneyCompact(n);
+        if (Math.abs(n) >= 100) return formatNumber(n, 0);
+        if (Math.abs(n) >= 1) return formatNumber(n, 2);
+        return formatNumber(n, 3);
+      }
+      function escapeHtml(text) {
+        return String(text)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function currentStat() { return state.stats[state.selected]; }
+      function statsUpToSelected() { return state.stats.slice(0, state.selected + 1); }
+      function seriesOf(selector) { return statsUpToSelected().map(selector); }
+      function activeFirmTotal(stat) {
+        let total = 0;
+        for (const key of INDUSTRIES) total += stat.firms[key] || 0;
+        return total;
+      }
+      function sum(values) { return values.reduce((acc, value) => acc + value, 0); }
+
+      // ------------------------------------------------------------------
+      // 开始界面 / 仿真
+      // ------------------------------------------------------------------
+      document.querySelectorAll("#duration-options button").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll("#duration-options button").forEach((b) => b.classList.remove("active"));
+          button.classList.add("active");
+          selectedMonths = Number(button.dataset.months);
+        });
+      });
+
+      function setActiveMonths(months) {
+        selectedMonths = months;
+        document.querySelectorAll("#duration-options button").forEach((button) => {
+          button.classList.toggle("active", Number(button.dataset.months) === months);
+        });
+      }
+
+      function normalizeInterval(value) {
+        const number = Number(value);
+        return [200, 300, 500].includes(number) ? number : 300;
+      }
+
+      function setModeSelection(mode, interval) {
+        selectedMode = mode === "play" ? "play" : "fast";
+        selectedInterval = normalizeInterval(interval);
+        document.querySelectorAll("#mode-options .mode-option").forEach((button) => {
+          button.classList.toggle("active", button.dataset.mode === selectedMode);
+        });
+        $("start-play-options").classList.toggle("hidden", selectedMode !== "play");
+        $("start-interval").value = String(selectedInterval);
+      }
+
+      document.querySelectorAll("#mode-options .mode-option").forEach((button) => {
+        button.addEventListener("click", () => {
+          setModeSelection(button.dataset.mode, selectedInterval);
+        });
+      });
+      $("start-interval").addEventListener("change", () => {
+        selectedInterval = normalizeInterval($("start-interval").value);
+      });
+
+      function showStartError(message) {
+        startError.textContent = message || "";
+      }
+
+      function stopPlayback() {
+        if (state.playTimer !== null) {
+          clearTimeout(state.playTimer);
+          state.playTimer = null;
+        }
+        state.playToken += 1;
+        state.running = false;
+        state.paused = false;
+        const resolve = state.playResolve;
+        state.playResolve = null;
+        if (resolve) resolve(false);
+      }
+
+      function revealApp(mode, months, seed) {
+        startScreen.classList.add("hidden");
+        app.classList.remove("hidden");
+        state.mode = mode;
+        selectedMonths = months;
+        setActiveMonths(months);
+        $("seed-input").value = String(seed);
+        $("run-meta").textContent = `第一次工业革命 · 种子 ${seed} · ${months} 月 · ${mode === "play" ? "游玩模式" : "快速模式"}`;
+        monthSlider.min = "1";
+        monthSlider.max = String(months);
+        $("play-controls").classList.toggle("hidden", mode !== "play");
+        if (mode === "play") {
+          $("play-interval").value = String(state.intervalMs);
+          $("play-interval").disabled = false;
+          $("play-toggle").disabled = false;
+        }
+      }
+
+      function renderPlayProgress() {
+        if (state.mode !== "play" || !state.stats.length) return;
+        const completed = state.stats.length;
+        const percent = Math.min(100, (completed / state.months) * 100);
+        $("play-progress-fill").style.width = `${percent.toFixed(2)}%`;
+        $("play-progress-text").textContent = `第 ${completed} / ${state.months} 月 · ${percent.toFixed(1)}%`;
+        if (!state.completed) {
+          $("play-toggle").textContent = state.paused ? "继续" : "暂停";
+          $("play-toggle").disabled = false;
+          $("play-interval").disabled = false;
+          $("run-status").textContent = state.paused ? "已暂停" : "逐月运行中";
+          $("timeline-runtime").textContent = `游玩模式 · 间隔 ${state.intervalMs} 毫秒/tick`;
+          $("run-summary").innerHTML = `<div class="summary-placeholder"><strong>${state.paused ? "游玩模式已暂停" : "游玩模式运行中"}</strong> · 第 ${completed} / ${state.months} 月 · ${percent.toFixed(1)}%<br>完成后显示存活人口、GDP、全社会利润率的最小值/最大值/末值。</div>`;
+        } else {
+          $("play-toggle").textContent = "已完成";
+          $("play-toggle").disabled = true;
+          $("play-interval").disabled = true;
+        }
+      }
+
+      function finishPlay(token) {
+        if (token !== state.playToken) return;
+        if (state.playTimer !== null) {
+          clearTimeout(state.playTimer);
+          state.playTimer = null;
+        }
+        state.running = false;
+        state.completed = true;
+        state.paused = false;
+        state.elapsedMs = performance.now() - state.playBegan;
+        $("run-status").textContent = "运行完成";
+        $("timeline-runtime").textContent = `游玩模式 · 总耗时 ${(state.elapsedMs / 1000).toFixed(2)} 秒（含等待） · 平均 ${(state.elapsedMs / state.months).toFixed(2)} 毫秒/tick`;
+        renderSummary();
+        renderTimeline();
+        renderPlayProgress();
+        const resolve = state.playResolve;
+        state.playResolve = null;
+        if (resolve) resolve(true);
+      }
+
+      function failPlay(error, token) {
+        if (token !== state.playToken) return;
+        if (state.playTimer !== null) {
+          clearTimeout(state.playTimer);
+          state.playTimer = null;
+        }
+        state.running = false;
+        state.paused = false;
+        $("run-status").textContent = "运行中断";
+        if (window.__showEcosimError) {
+          window.__showEcosimError(error && error.stack ? error.stack : String(error));
+        }
+        const resolve = state.playResolve;
+        state.playResolve = null;
+        if (resolve) resolve(false);
+      }
+
+      function startPlayRun(months, seed, intervalMs) {
+        state.intervalMs = normalizeInterval(intervalMs);
+        selectedInterval = state.intervalMs;
+        const engine = new E.Engine(seed);
+        E.buildScenario1(engine);
+        const began = performance.now();
+        state.engine = engine;
+        state.stats = [];
+        state.months = months;
+        state.seed = seed;
+        state.selected = 0;
+        state.mode = "play";
+        state.intervalMs = normalizeInterval(intervalMs);
+        state.running = true;
+        state.paused = false;
+        state.completed = false;
+        state.elapsedMs = 0;
+        state.playComputeMs = 0;
+        state.playBegan = began;
+        state.detailDomain = null;
+        $("detail").classList.add("hidden");
+        revealApp("play", months, seed);
+        $("run-status").textContent = "逐月运行中";
+        $("timeline-runtime").textContent = `游玩模式 · 间隔 ${state.intervalMs} 毫秒/tick`;
+        $("play-progress-fill").style.width = "0%";
+        $("play-progress-text").textContent = `第 0 / ${months} 月 · 0.0%`;
+        $("run-summary").innerHTML = `<div class="summary-placeholder"><strong>游玩模式运行中</strong> · 第 0 / ${months} 月 · 0.0%<br>完成后显示存活人口、GDP、全社会利润率的最小值/最大值/末值。</div>`;
+
+        const token = state.playToken;
+        let resolvePlay = null;
+        const promise = new Promise((resolve) => { resolvePlay = resolve; });
+        state.playResolve = resolvePlay;
+
+        const runOneTick = () => {
+          if (token !== state.playToken || !state.running || state.paused) return;
+          try {
+            const tickBegan = performance.now();
+            const stat = engine.step();
+            state.playComputeMs += performance.now() - tickBegan;
+            state.stats.push(stat);
+            state.selected = state.stats.length - 1;
+            renderSelected();
+            renderPlayProgress();
+            if (state.stats.length >= months) {
+              finishPlay(token);
+            } else {
+              state.scheduleNext();
+            }
+          } catch (error) {
+            console.error(error);
+            failPlay(error, token);
+          }
+        };
+        state.scheduleNext = () => {
+          if (state.playTimer !== null) {
+            clearTimeout(state.playTimer);
+            state.playTimer = null;
+          }
+          if (token !== state.playToken || !state.running || state.paused) return;
+          state.playTimer = setTimeout(runOneTick, state.intervalMs);
+        };
+        // 第一个 tick 立即执行，之后按选择间隔逐 tick 推进。
+        runOneTick();
+        return promise;
+      }
+
+      function startFastRun(months, seed) {
+        const began = performance.now();
+        const engine = new E.Engine(seed);
+        E.buildScenario1(engine);
+        const stats = [];
+        for (let month = 0; month < months; month++) {
+          stats.push(engine.step());
+        }
+        const elapsed = performance.now() - began;
+        state.engine = engine;
+        state.stats = stats;
+        state.months = months;
+        state.seed = seed;
+        state.selected = months - 1;
+        state.mode = "fast";
+        state.running = false;
+        state.paused = false;
+        state.completed = true;
+        state.elapsedMs = elapsed;
+        state.playComputeMs = elapsed;
+        state.detailDomain = null;
+        $("detail").classList.add("hidden");
+        revealApp("fast", months, seed);
+        $("play-controls").classList.add("hidden");
+        $("run-status").textContent = "运行完成";
+        $("timeline-runtime").textContent = `快速模式 · 总耗时 ${(elapsed / 1000).toFixed(3)} 秒 · ${(elapsed / months).toFixed(2)} 毫秒/tick`;
+        renderSummary();
+        renderSelected();
+        return true;
+      }
+
+      function startSimulation(months, seed, mode, intervalMs) {
+        if (!Number.isInteger(months) || months < 1 || months > 600) {
+          showStartError("月数必须是 1 至 600 的整数。");
+          return false;
+        }
+        if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) {
+          showStartError("随机种子必须是 0 至 2147483647 的整数。");
+          return false;
+        }
+        showStartError("");
+        stopPlayback();
+        startButton.disabled = true;
+        startButton.textContent = "运行中…";
+        try {
+          if (mode === "play") {
+            return startPlayRun(months, seed, intervalMs);
+          }
+          return startFastRun(months, seed);
+        } catch (error) {
+          console.error(error);
+          if (window.__showEcosimError) {
+            window.__showEcosimError(error && error.stack ? error.stack : String(error));
+          }
+          showStartError("运行失败：" + (error && error.message ? error.message : String(error)));
+          startScreen.classList.remove("hidden");
+          app.classList.add("hidden");
+          return false;
+        } finally {
+          startButton.disabled = false;
+          startButton.textContent = "开始运行";
+        }
+      }
+
+      startButton.addEventListener("click", () => {
+        const seed = Number($("seed-input").value);
+        startSimulation(selectedMonths, seed, selectedMode, selectedInterval);
+      });
+
+      $("back-start").addEventListener("click", () => {
+        stopPlayback();
+        state.detailDomain = null;
+        $("detail").classList.add("hidden");
+        app.classList.add("hidden");
+        startScreen.classList.remove("hidden");
+        if (state.months) {
+          $("seed-input").value = String(state.seed);
+          setActiveMonths(state.months);
+          setModeSelection(state.mode, state.intervalMs);
+        }
+      });
+
+      $("restart-btn").addEventListener("click", () => {
+        if (!state.months) return;
+        startSimulation(state.months, state.seed, state.mode, state.intervalMs);
+      });
+
+      $("play-toggle").addEventListener("click", () => {
+        if (state.mode !== "play" || state.completed || !state.running) return;
+        if (state.paused) {
+          state.paused = false;
+          renderPlayProgress();
+          state.scheduleNext();
+        } else {
+          state.paused = true;
+          if (state.playTimer !== null) {
+            clearTimeout(state.playTimer);
+            state.playTimer = null;
+          }
+          renderPlayProgress();
+        }
+      });
+
+      $("play-interval").addEventListener("change", () => {
+        const value = normalizeInterval($("play-interval").value);
+        state.intervalMs = value;
+        selectedInterval = value;
+        $("start-interval").value = String(value);
+        if (state.running && !state.paused) state.scheduleNext();
+        renderPlayProgress();
+      });
+
+      // 拖动时间轴时用 rAF 合并连续 input 事件。
+      function scheduleSelectedRender() {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(() => {
+          renderQueued = false;
+          renderSelected();
+        });
+      }
+      monthSlider.addEventListener("input", () => {
+        if (!state.stats.length || state.running) return;
+        const tick = Number(monthSlider.value);
+        state.selected = Math.max(0, Math.min(state.months - 1, tick - 1));
+        scheduleSelectedRender();
+      });
+      $("prev-month").addEventListener("click", () => {
+        if (state.running) return;
+        selectTick(currentStat().tick - 1);
+      });
+      $("next-month").addEventListener("click", () => {
+        if (state.running) return;
+        selectTick(currentStat().tick + 1);
+      });
+      $("last-month").addEventListener("click", () => {
+        if (state.running) return;
+        selectTick(state.months);
+      });
+
+      function selectTick(tick) {
+        if (!state.stats.length || state.running) return;
+        state.selected = Math.max(0, Math.min(state.months - 1, tick - 1));
+        renderSelected();
+      }
+
+      function renderTimeline() {
+        const stat = currentStat();
+        const locked = state.running;
+        monthSlider.max = String(state.months);
+        monthSlider.value = String(stat.tick);
+        monthSlider.disabled = locked;
+        monthSlider.setAttribute("aria-valuetext", `第 ${stat.tick} 月，共 ${state.months} 月`);
+        timelineLabel.textContent = `第 ${stat.tick} 月 / 共 ${state.months} 月`;
+        $("prev-month").disabled = locked || stat.tick <= 1;
+        $("next-month").disabled = locked || stat.tick >= state.months;
+        $("last-month").disabled = locked || stat.tick >= state.months;
+      }
+
+      // ------------------------------------------------------------------
+      // 全期汇总
+      // ------------------------------------------------------------------
+      function renderSummary() {
+        const stats = state.stats;
+        if (!stats.length) return;
+        const final = stats[stats.length - 1];
+        const aliveValues = stats.map((s) => s.alive);
+        const gdpValues = stats.map((s) => s.gdp);
+        const profitValues = stats.map((s) => s.profit_rate);
+        const minAlive = Math.min(...aliveValues);
+        const maxAlive = Math.max(...aliveValues);
+        const minGdp = Math.min(...gdpValues);
+        const maxGdp = Math.max(...gdpValues);
+        const minProfit = Math.min(...profitValues);
+        const maxProfit = Math.max(...profitValues);
+        $("run-summary").innerHTML = `
+          <div class="summary-card" title="全期汇总与当前时间轴选择无关">
+            <div class="summary-label">存活人口 · 全期</div>
+            <div class="summary-main">${formatInt(final.alive)}</div>
+            <div class="summary-sub">最小 ${formatInt(minAlive)} · 最大 ${formatInt(maxAlive)} · 末值 ${formatInt(final.alive)}</div>
+          </div>
+          <div class="summary-card" title="全期汇总与当前时间轴选择无关">
+            <div class="summary-label">GDP · 全期</div>
+            <div class="summary-main">${formatNumber(final.gdp, 0)}</div>
+            <div class="summary-sub">最小 ${formatNumber(minGdp, 0)} · 最大 ${formatNumber(maxGdp, 0)} · 末值 ${formatNumber(final.gdp, 0)}</div>
+          </div>
+          <div class="summary-card" title="全期汇总与当前时间轴选择无关">
+            <div class="summary-label">全社会利润率 · 全期</div>
+            <div class="summary-main">${formatPercent(final.profit_rate, 2)}</div>
+            <div class="summary-sub">最小 ${formatPercent(minProfit, 2)} · 最大 ${formatPercent(maxProfit, 2)} · 末值 ${formatPercent(final.profit_rate, 2)}</div>
+          </div>`;
+      }
+
+      // ------------------------------------------------------------------
+      // 六张卡片 / 领域详情数据
+      // ------------------------------------------------------------------
+      function buildDomains(stat) {
+        const upTo = statsUpToSelected();
+        const aliveSeries = upTo.map((s) => s.alive);
+        const agSeries = upTo.map((s) => s.ag_productivity);
+        const housingSeries = upTo.map((s) => s.housing_satisfaction);
+        const firmsSeries = upTo.map(activeFirmTotal);
+        const foodPriceSeries = upTo.map((s) => s.prices.food);
+        const profitSeries = upTo.map((s) => s.profit_rate);
+        const totalFirms = activeFirmTotal(stat);
+        const textileFirms = stat.firms.textile_mill || 0;
+        const constructionFirms = stat.firms.construction || 0;
+        const fertilizer = stat.fertilizer_used || 0;
+        const machinery = stat.farm_machinery || 0;
+        const cumulativeInvestment = sum(upTo.map((s) => s.investment || 0));
+        const priceFood = stat.prices.food;
+        const priceCoal = stat.prices.coal;
+        const priceSteel = stat.prices.steel;
+        const priceMachinery = stat.prices.machinery;
+        const priceBuilding = stat.prices.building;
+        const living = stat.living_standard || {};
+        const domains = {};
+
+        domains.population = {
+          title: "人口与阶级",
+          subtitle: `第 ${stat.tick} 月的存活人口、就业结构与生活标准。`,
+          value: formatInt(stat.alive),
+          unit: "存活人口",
+          rows: [
+            `失业率 ${formatPercent(stat.unemployment_rate, 1)}`,
+            `农业就业 ${formatInt(stat.ag_employed)}`,
+            `工业就业 ${formatInt(stat.non_ag_employed)}`,
+          ],
+          color: "#2f8f4e",
+          spark: aliveSeries,
+          chartValues: aliveSeries,
+          kpis: [
+            ["存活人口", formatInt(stat.alive)],
+            ["失业率", formatPercent(stat.unemployment_rate, 1)],
+            ["农业就业", formatInt(stat.ag_employed)],
+            ["工业就业", formatInt(stat.non_ag_employed)],
+          ],
+          table: [
+            ["存活人口", formatInt(stat.alive)],
+            ["本月死亡", formatInt(stat.dead_this_month)],
+            ["失业率", formatPercent(stat.unemployment_rate, 2)],
+            ["农业在业人口", formatInt(stat.ag_employed)],
+            ["非农在业人口", formatInt(stat.non_ag_employed)],
+            ["生存线", `${formatInt(living.survival || 0)} 人`],
+            ["温饱线", `${formatInt(living.subsistence || 0)} 人`],
+            ["小康", `${formatInt(living.comfort || 0)} 人`],
+            ["悠闲", `${formatInt(living.leisure || 0)} 人`],
+            ["本月饥饿人口", `${formatInt(stat.hungry_workers || 0)} 人`],
+          ],
+          note: "就业口径只统计存活且在业人口；生活标准按上月实际消费分类。",
+        };
+
+        domains.agriculture = {
+          title: "农业与土地",
+          subtitle: `第 ${stat.tick} 月的资本主义农场、自耕农、农机、化肥与地价。`,
+          value: formatNumber(stat.ag_productivity, 3),
+          unit: "农业劳动生产率（吨/人）",
+          rows: [
+            `资本主义农场 ${formatInt(stat.capitalist_farms)}`,
+            `农机 ${formatInt(machinery)} 台`,
+            `化肥 ${formatNumber(fertilizer, 1)} 吨/月`,
+          ],
+          color: "#6a9b45",
+          spark: agSeries,
+          chartValues: agSeries,
+          kpis: [
+            ["资本主义农场", formatInt(stat.capitalist_farms)],
+            ["自耕农农场", formatInt(stat.household_farms)],
+            ["化肥使用", `${formatNumber(fertilizer, 1)} 吨/月`],
+            ["农机数量", `${formatInt(machinery)} 台`],
+          ],
+          table: [
+            ["粮食产出", `${formatNumber(stat.food_output, 1)} 吨/月`],
+            ["农业劳动生产率", `${formatNumber(stat.ag_productivity, 3)} 吨/人`],
+            ["资本主义农场", `${formatInt(stat.capitalist_farms)} 家`],
+            ["自耕农农场", `${formatInt(stat.household_farms)} 家`],
+            ["活跃农业企业", `${formatInt((stat.firms.agriculture || 0))} 家`],
+            ["农机数量", `${formatInt(machinery)} 台`],
+            ["化肥使用", `${formatNumber(fertilizer, 1)} 吨/月`],
+            ["土地价格", `${formatNumber(stat.land_price, 2)} 元/亩`],
+            ["自耕农土地", `${formatNumber(stat.smallholder_land, 1)} 亩`],
+            ["粮食参考价", `${formatPrice(priceFood)} 元/吨`],
+            ["化肥参考价", `${formatPrice(stat.prices.fertilizer)} 元/吨`],
+          ],
+          note: "农机只改变一名工人可管理的土地面积；化肥在库存足够时使亩产翻倍。农场化肥采购不计入 engine 的 month_input_cost，这是已保留的缺陷。",
+        };
+
+        domains.city = {
+          title: "城市与住房",
+          subtitle: `第 ${stat.tick} 月的住房消费、纺织厂与施工队。`,
+          value: formatPercent(stat.housing_satisfaction, 1),
+          unit: "本月住房需求满足率",
+          rows: [
+            `住房消费 ${formatNumber(stat.housing_consumption, 1)} ㎡/月`,
+            `纺织厂 ${formatInt(textileFirms)}`,
+            `施工队 ${formatInt(constructionFirms)}`,
+          ],
+          color: "#7f9bb5",
+          spark: housingSeries,
+          chartValues: housingSeries,
+          kpis: [
+            ["住房满足率", formatPercent(stat.housing_satisfaction, 1)],
+            ["住房消费", `${formatNumber(stat.housing_consumption, 1)} ㎡/月`],
+            ["纺织企业", formatInt(textileFirms)],
+            ["施工企业", formatInt(constructionFirms)],
+          ],
+          table: [
+            ["住房消费", `${formatNumber(stat.housing_consumption, 1)} 平方米/月`],
+            ["住房需求目标", `${formatNumber(stat.housing_demand, 1)} 平方米/月`],
+            ["满足率", formatPercent(stat.housing_satisfaction, 2)],
+            ["建筑参考价", `${formatPrice(priceBuilding)} 元/平方米`],
+            ["纺织厂", `${formatInt(textileFirms)} 家`],
+            ["施工队", `${formatInt(constructionFirms)} 家`],
+            ["纺织产出", `${formatNumber(stat.production.cloth, 1)} 件/月`],
+            ["建筑产出", `${formatNumber(stat.production.building, 1)} 平方米/月`],
+            ["口径", "只模拟住房月度流量，没有住房存量或入住率"],
+          ],
+          note: "“住房满足率”是本月实际住房消费与按生活标准计算的住房目标之比，不是入住率。当前引擎没有住房资产存量。",
+        };
+
+        const industryRows = INDUSTRIES.map((industry) => {
+          const out = SECTOR_PARAMS[industry].output;
+          return [
+            INDUSTRY_LABELS[industry],
+            `企业 ${formatInt(stat.firms[industry] || 0)} · 项目 ${formatInt((stat.project_by_industry && stat.project_by_industry[industry]) || 0)} · 产出 ${formatNumber(stat.production[out], 1)} ${GOOD_UNITS[out]}`,
+          ];
+        });
+        domains.industry = {
+          title: "企业与产业",
+          subtitle: `第 ${stat.tick} 月的企业数量、生产、投资项目与行业分布。`,
+          value: formatInt(totalFirms),
+          unit: "活跃企业",
+          rows: [
+            `行业 ${INDUSTRIES.length}`,
+            `钢铁 ${formatNumber(stat.production.steel, 1)} 吨/月`,
+            `机械 ${formatNumber(stat.production.machinery, 2)} 台/月`,
+            `活跃项目 ${formatInt(stat.active_projects)}`,
+          ],
+          color: "#c07b3a",
+          spark: firmsSeries,
+          chartValues: firmsSeries,
+          kpis: [
+            ["活跃企业", formatInt(totalFirms)],
+            ["钢铁产出", `${formatNumber(stat.production.steel, 1)} 吨/月`],
+            ["机械产出", `${formatNumber(stat.production.machinery, 2)} 台/月`],
+            ["活跃项目", formatInt(stat.active_projects)],
+          ],
+          table: [
+            ["活跃企业", `${formatInt(totalFirms)} 家`],
+            ["行业数量", `${INDUSTRIES.length} 个`],
+            ["本月投资额", `${formatNumber(stat.investment, 0)} 元`],
+            ["至本月累计投资", `${formatNumber(cumulativeInvestment, 0)} 元`],
+            ["活跃投资项目", `${formatInt(stat.active_projects)} 个`],
+            ["项目预留现金", `${formatNumber(stat.project_cash, 0)} 元`],
+            ...industryRows,
+          ],
+          note: "活跃项目数为当前选中的月末快照；农业项目使用 priority=True，绕过 MAX_ACTIVE_PROJECTS。",
+        };
+
+        const marketRows = GOODS.map((good) => {
+          const price = stat.prices[good];
+          const output = stat.production[good] || 0;
+          const volume = stat.volumes[good] || 0;
+          const streak = stat.zero_output_streak ? (stat.zero_output_streak[good] || 0) : 0;
+          return [
+            GOOD_LABELS[good],
+            `价格 ${formatPrice(price)} 元/${GOOD_UNITS[good]} · 产量 ${formatNumber(output, 2)} · 成交 ${formatNumber(volume, 1)} · 零产出 ${streak} 月`,
+          ];
+        });
+        domains.market = {
+          title: "市场与物价",
+          subtitle: `第 ${stat.tick} 月的参考价、产出、需求、供给与成交。`,
+          value: formatPrice(priceFood),
+          unit: "粮食参考价（元/吨）",
+          rows: [
+            `煤炭 ${formatPrice(priceCoal)}`,
+            `钢铁 ${formatPrice(priceSteel)}`,
+            `机械 ${formatPrice(priceMachinery)}`,
+          ],
+          color: "#b38a35",
+          spark: foodPriceSeries,
+          chartValues: foodPriceSeries,
+          kpis: [
+            ["粮食", `${formatPrice(priceFood)} 元/吨`],
+            ["煤炭", `${formatPrice(priceCoal)} 元/吨`],
+            ["钢铁", `${formatPrice(priceSteel)} 元/吨`],
+            ["建筑", `${formatPrice(priceBuilding)} 元/平方米`],
+          ],
+          table: [
+            ...marketRows,
+            ["市场总成交量口径", "各商品成交数量之和（不是金额）"],
+          ],
+          note: "参考价由成交价平滑、超额需求试探和成本价格带共同决定；不是出清均衡价。连续零产出列按商品展示当前累计月数。",
+        };
+
+        const final = state.stats[state.stats.length - 1];
+        domains.finance = {
+          title: "金融与利润",
+          subtitle: `第 ${stat.tick} 月的货币、银行、投资与全社会利润率。`,
+          value: formatMoneyCompact(stat.money_total),
+          unit: "货币总量（元）",
+          rows: [
+            `利润率 ${formatPercent(stat.profit_rate, 2)}`,
+            `银行 ${formatMoneyCompact(stat.bank_cash)}`,
+            `贷款 ${formatMoneyCompact(stat.bank_loans)}`,
+          ],
+          color: "#5d7b8d",
+          spark: profitSeries,
+          chartValues: profitSeries,
+          kpis: [
+            ["货币总量", formatMoneyCompact(stat.money_total)],
+            ["全社会利润率", formatPercent(stat.profit_rate, 2)],
+            ["银行现金", formatMoneyCompact(stat.bank_cash)],
+            ["贷款余额", formatMoneyCompact(stat.bank_loans)],
+          ],
+          table: [
+            ["货币总量", `${formatNumber(stat.money_total, 2)} 元`],
+            ["初始货币", `${formatNumber(state.engine.moneyInitial, 2)} 元`],
+            ["银行现金", `${formatNumber(stat.bank_cash, 2)} 元`],
+            ["贷款余额", `${formatNumber(stat.bank_loans, 2)} 元`],
+            ["本月消费支出", `${formatNumber(stat.consumption, 2)} 元`],
+            ["本月投资额", `${formatNumber(stat.investment, 2)} 元`],
+            ["GDP（消费 + 投资）", `${formatNumber(stat.gdp, 2)} 元`],
+            ["资本存量", `${formatNumber(stat.capital_stock, 2)} 元`],
+            ["全社会利润率", formatPercent(stat.profit_rate, 4)],
+            ["活跃投资项目", `${formatInt(stat.active_projects)} 个`],
+            ["项目预留现金", `${formatNumber(stat.project_cash, 2)} 元`],
+            ["至本月累计投资", `${formatNumber(cumulativeInvestment, 2)} 元`],
+            ["全期末月 GDP", `${formatNumber(final.gdp, 2)} 元`],
+            ["全期末月利润率", formatPercent(final.profit_rate, 4)],
+          ],
+          note: "GDP 口径是居民消费支出 + 投资项目资本品采购；企业中间投入不计入 GDP。利润率分母包含土地重估价值与库存，折旧则错误地包含土地，这是保留缺陷。",
+        };
+        return domains;
+      }
+
+      // ------------------------------------------------------------------
+      // 卡片渲染
+      // ------------------------------------------------------------------
+      function sparkline(values, color) {
+        const w = 220;
+        const h = 32;
+        const pad = 3;
+        if (!values.length) return "";
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const span = max - min || 1;
+        const points = values.map((value, index) => {
+          const x = pad + (index / Math.max(values.length - 1, 1)) * (w - pad * 2);
+          const y = h - pad - ((value - min) / span) * (h - pad * 2);
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(" ");
+        const last = values[values.length - 1];
+        const lastX = w - pad;
+        const lastY = h - pad - ((last - min) / span) * (h - pad * 2);
+        return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          ${values.length === 1 ? `<circle cx="${lastX}" cy="${lastY}" r="2.8" fill="${color}"></circle>` : ""}
+        </svg>`;
+      }
+
+      function renderCard(domainKey) {
+        const d = state.domains[domainKey];
+        if (!d) return "";
+        return `<button class="card" data-domain="${domainKey}" type="button">
+          <div class="card-head"><span class="card-title">${escapeHtml(d.title)}</span><span class="card-arrow">↗</span></div>
+          <div class="card-value">${escapeHtml(d.value)}</div>
+          <div class="card-sub">${escapeHtml(d.unit)}</div>
+          <div class="card-rows">${d.rows.map((row) => `<span>${escapeHtml(row)}</span>`).join("")}</div>
+          ${sparkline(d.spark, d.color)}
+        </button>`;
+      }
+
+      function renderCards() {
+        $("cards-left").innerHTML = ["population", "agriculture", "city"].map(renderCard).join("");
+        $("cards-right").innerHTML = ["industry", "market", "finance"].map(renderCard).join("");
+      }
+
+      // 卡片点击通过事件委托，避免每次换月重新绑定。
+      document.querySelectorAll(".side").forEach((side) => {
+        side.addEventListener("click", (event) => {
+          const card = event.target.closest(".card");
+          if (card && card.dataset.domain) renderDetail(card.dataset.domain);
+        });
+      });
+
+      // ------------------------------------------------------------------
+      // 诊断区
+      // ------------------------------------------------------------------
+      function renderDiagnostics(stat) {
+        const rows = GOODS.map((good) => {
+          const streak = stat.zero_output_streak ? (stat.zero_output_streak[good] || 0) : 0;
+          const output = stat.production[good] || 0;
+          const volume = stat.volumes[good] || 0;
+          const zeroClass = streak > 0 ? "bad" : "ok";
+          return `<tr>
+            <td>${GOOD_LABELS[good]}</td>
+            <td>${formatNumber(output, 2)} ${GOOD_UNITS[good]}</td>
+            <td class="${zeroClass}">${formatInt(streak)} 月</td>
+            <td>${formatPrice(stat.prices[good])}</td>
+            <td>${formatNumber(volume, 1)} ${GOOD_UNITS[good]}</td>
+          </tr>`;
+        }).join("");
+        $("zero-table").innerHTML = rows;
+        $("zero-note").textContent = `第 ${stat.tick} 月快照。连续零产出达到 3 个月会触发引擎警告；钢铁、砖、纺织、机械、建筑在当前默认运行中会长期为 0。`;
+
+        const upTo = statsUpToSelected();
+        const cumulativeInvestment = sum(upTo.map((s) => s.investment || 0));
+        $("diag-metrics").innerHTML = [
+          ["活跃项目", formatInt(stat.active_projects), "项目"],
+          ["本月投资额", formatMoneyCompact(stat.investment), "元"],
+          ["累计投资", formatMoneyCompact(cumulativeInvestment), "元"],
+          ["全社会利润率", formatPercent(stat.profit_rate, 2), "利润/资本"],
+          ["化肥使用", formatNumber(stat.fertilizer_used, 1), "吨/月"],
+          ["农机数量", formatInt(stat.farm_machinery), "台"],
+          ["在建项目现金", formatMoneyCompact(stat.project_cash), "元"],
+          ["自耕农土地", formatNumber(stat.smallholder_land, 0), "亩"],
+          ["土地价格", formatNumber(stat.land_price, 1), "元/亩"],
+        ].map(([label, value, unit]) => `<div class="diag-metric"><b>${escapeHtml(value)}</b><span>${escapeHtml(label)} · ${escapeHtml(unit)}</span></div>`).join("");
+
+        const projectCounters = stat.project_by_industry || {};
+        const nonzero = INDUSTRIES.filter((industry) => (projectCounters[industry] || 0) > 0);
+        $("project-total").textContent = formatInt(stat.active_projects);
+        if (!nonzero.length) {
+          $("project-chips").innerHTML = `<span class="chip">无活跃投资项目</span>`;
+        } else {
+          $("project-chips").innerHTML = nonzero.map((industry) => {
+            const count = projectCounters[industry] || 0;
+            const alert = industry === "agriculture" ? " alert" : "";
+            return `<span class="chip${alert}">${INDUSTRY_LABELS[industry]} ${formatInt(count)}</span>`;
+          }).join("");
+        }
+
+        const warnings = stat.warnings || [];
+        if (warnings.length) {
+          $("diag-warnings").innerHTML = warnings.slice(0, 18).map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
+          if (warnings.length > 18) {
+            $("diag-warnings").innerHTML += `<li>……另有 ${warnings.length - 18} 条警告</li>`;
+          }
+        } else {
+          $("diag-warnings").innerHTML = `<li class="quiet">本月没有引擎警告。零产出警告在连续第 3 个月触发。</li>`;
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // 时间轴 / 统一重绘
+      // ------------------------------------------------------------------
+      function renderSelected() {
+        if (!state.stats.length) return;
+        try {
+          const stat = currentStat();
+          state.domains = buildDomains(stat);
+          renderCards();
+          renderMap(stat);
+          renderDiagnostics(stat);
+          renderTimeline();
+          if (state.detailDomain) renderDetail(state.detailDomain);
+        } catch (error) {
+          console.error(error);
+          if (window.__showEcosimError) window.__showEcosimError(error && error.stack ? error.stack : String(error));
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // 六边形地图
+      // ------------------------------------------------------------------
+      const R = 155;
+      const CX = 600;
+      const CY = 465;
+      const HEXES = {
+        city:        { cx: CX,         cy: CY,        label: "城市", terrain: "city" },
+        machinery:   { cx: CX - 0.866 * R, cy: CY - 1.5 * R, label: "机械", terrain: "plain" },
+        steel:       { cx: CX + 0.866 * R, cy: CY - 1.5 * R, label: "钢铁", terrain: "plain" },
+        agriculture: { cx: CX - 1.732 * R, cy: CY,        label: "农业", terrain: "farm" },
+        mine:        { cx: CX + 1.732 * R, cy: CY,        label: "矿场", terrain: "mine" },
+        fertilizer:  { cx: CX - 0.866 * R, cy: CY + 1.5 * R, label: "化肥", terrain: "plain" },
+        brick:       { cx: CX + 0.866 * R, cy: CY + 1.5 * R, label: "砖厂", terrain: "plain" },
+      };
+      const MAP_ORDER = ["city", "machinery", "steel", "agriculture", "mine", "fertilizer", "brick"];
+
+      function svgEl(name, attrs, parent) {
+        const node = document.createElementNS(NS, name);
+        Object.entries(attrs || {}).forEach(([key, value]) => node.setAttribute(key, value));
+        (parent || svg).appendChild(node);
+        return node;
+      }
+      function hexPoints(cx, cy, radius) {
+        const points = [];
+        for (let i = 0; i < 6; i++) {
+          const angle = (Math.PI / 3) * i + Math.PI / 6;
+          points.push(`${(cx + radius * Math.cos(angle)).toFixed(2)},${(cy + radius * Math.sin(angle)).toFixed(2)}`);
+        }
+        return points.join(" ");
+      }
+      function drawTree(x, y, scale) {
+        const g = svgEl("g", { transform: `translate(${x} ${y}) scale(${scale || 1})` });
+        svgEl("rect", { x: -3, y: 14, width: 6, height: 18, rx: 2, fill: "#8a6540" }, g);
+        svgEl("circle", { cx: 0, cy: 2, r: 13, fill: "#4f8657" }, g);
+        svgEl("circle", { cx: -6, cy: 8, r: 9, fill: "#5f9864" }, g);
+        svgEl("circle", { cx: 7, cy: 9, r: 8, fill: "#3f714b" }, g);
+      }
+      function drawTerrain(cx, cy, terrain) {
+        const g = svgEl("g", {});
+        if (terrain === "farm") {
+          const river = `M ${cx - 125} ${cy - 40} C ${cx - 70} ${cy - 15}, ${cx - 40} ${cy + 60}, ${cx + 20} ${cy + 70} S ${cx + 100} ${cy + 40}, ${cx + 125} ${cy + 85}`;
+          svgEl("path", { d: river, fill: "none", stroke: "var(--river)", "stroke-width": 12, "stroke-linecap": "round", opacity: 0.9 }, g);
+          svgEl("path", { d: river, fill: "none", stroke: "#b8e4f1", "stroke-width": 4, "stroke-linecap": "round", opacity: 0.8 }, g);
+          for (let row = 0; row < 3; row++) {
+            for (let col = 0; col < 4; col++) {
+              const x = cx - 78 + col * 44;
+              const y = cy + 4 + row * 35;
+              svgEl("polygon", { points: `${x},${y} ${x + 40},${y - 4} ${x + 44},${y + 25} ${x + 3},${y + 30}`, fill: row % 2 ? "var(--field)" : "#b58a2f", stroke: "#f7e7a8", "stroke-width": 1.5, opacity: 0.95 }, g);
+            }
+          }
+          drawTree(cx - 92, cy - 72, 0.95);
+          drawTree(cx - 62, cy - 88, 0.8);
+          drawTree(cx - 110, cy - 42, 0.75);
+        } else if (terrain === "mine") {
+          svgEl("polygon", { points: `${cx - 125},${cy + 55} ${cx - 55},${cy - 95} ${cx + 10},${cy + 55}`, fill: "var(--mountain)", stroke: "#6c6862", "stroke-width": 3 }, g);
+          svgEl("polygon", { points: `${cx - 65},${cy - 65} ${cx - 40},${cy - 100} ${cx - 10},${cy - 65}`, fill: "#f0eee7", opacity: 0.95 }, g);
+          svgEl("polygon", { points: `${cx - 20},${cy + 55} ${cx + 45},${cy - 55} ${cx + 115},${cy + 55}`, fill: "var(--mountain-dark)", stroke: "#5a5650", "stroke-width": 3 }, g);
+          svgEl("path", { d: `M ${cx - 12} ${cy + 55} Q ${cx + 8} ${cy + 10}, ${cx + 28} ${cy + 55}`, fill: "#3f3a33", stroke: "#2f2b26", "stroke-width": 2 }, g);
+        } else if (terrain === "city") {
+          svgEl("rect", { x: cx - 125, y: cy - 80, width: 62, height: 95, rx: 5, fill: "#cdb795", stroke: "#8f7d60", "stroke-width": 2 }, g);
+          svgEl("rect", { x: cx - 48, y: cy - 100, width: 82, height: 115, rx: 6, fill: "#dbc9aa", stroke: "#8f7d60", "stroke-width": 2 }, g);
+          svgEl("rect", { x: cx + 48, y: cy - 55, width: 58, height: 70, rx: 5, fill: "#c7ae86", stroke: "#8f7d60", "stroke-width": 2 }, g);
+          for (let i = 0; i < 3; i++) {
+            svgEl("rect", { x: cx - 38, y: cy - 82 + i * 26, width: 12, height: 12, rx: 2, fill: "#6f8fa4" }, g);
+            svgEl("rect", { x: cx - 14, y: cy - 82 + i * 26, width: 12, height: 12, rx: 2, fill: "#6f8fa4" }, g);
+          }
+          svgEl("path", { d: `M ${cx + 60} ${cy - 55} L ${cx + 60} ${cy - 90} L ${cx + 96} ${cy - 90}`, fill: "none", stroke: "#8f7d60", "stroke-width": 3 }, g);
+        } else {
+          drawTree(cx - 92, cy - 62, 0.9);
+          drawTree(cx + 78, cy - 30, 0.75);
+          drawTree(cx - 10, cy + 86, 0.65);
+        }
+        return g;
+      }
+      function drawTile(key) {
+        const tile = HEXES[key];
+        const g = svgEl("g", {});
+        svgEl("polygon", { class: "hex", points: hexPoints(tile.cx, tile.cy, R), fill: tile.terrain === "mine" ? "#a8a49c" : tile.terrain === "city" ? "#d8c7a7" : "#99c47d" }, g);
+        svgEl("polygon", { points: hexPoints(tile.cx, tile.cy - 2, R - 8), fill: "none", stroke: "rgba(255,255,255,0.35)", "stroke-width": 2 }, g);
+        drawTerrain(tile.cx, tile.cy, tile.terrain);
+        const labelY = (key === "fertilizer" || key === "brick") ? tile.cy - 55 : tile.cy - 112;
+        svgEl("text", { class: "tile-label", x: tile.cx - 48, y: labelY }, g).textContent = tile.label;
+        return g;
+      }
+
+      function tierText(group) {
+        const tiers = (group.tierBreakdown || []).map(([tier]) => tier).filter((tier) => tier >= 0);
+        if (!tiers.length) return "—";
+        const min = Math.min(...tiers);
+        const max = Math.max(...tiers);
+        return min === max ? String(min) : `${min}~${max}`;
+      }
+      function breakdownText(group) {
+        if (!group.tierBreakdown || !group.tierBreakdown.length) return "无设备";
+        return group.tierBreakdown.map(([tier, count]) => `${tier} 级 × ${count}`).join("、");
+      }
+      function outputText(group) {
+        if (!group.outputGood) return "";
+        return `${formatNumber(group.output, 2)} ${GOOD_UNITS[group.outputGood]}`;
+      }
+      function groupTip(group) {
+        if (group.kind === "housing") {
+          return `<strong>住房流量 · 第 ${currentStat().tick} 月</strong><br>
+            居民 ${formatInt(group.residents)} 人<br>
+            住房消费 ${formatNumber(group.consumption, 1)} 平方米/月<br>
+            住房目标 ${formatNumber(group.demand, 1)} 平方米/月<br>
+            满足率 ${formatPercent(group.satisfaction, 1)} · 建筑 ${formatPrice(group.price)} 元/平方米<br>
+            <span style="color:#6d786d">当前引擎没有住房存量，不计算入住率。</span>`;
+        }
+        if (group.kind === "equipment") {
+          const extra = group.industry === "agriculture"
+            ? `<br>家庭农场 ${formatInt(group.households || 0)} 家 · 资本主义农场 ${formatInt(group.capitalists || 0)} 家<br>化肥使用 ${formatNumber(group.fertilizer || 0, 1)} 吨/月`
+            : "";
+          return `<strong>${escapeHtml(group.label)} · 第 ${currentStat().tick} 月</strong><br>
+            活跃企业 ${formatInt(group.firms || 0)} 家 · 员工 ${formatInt(group.employees)} 人<br>
+            设备 ${formatInt(group.units)} 台 · 等级 ${escapeHtml(breakdownText(group))}<br>
+            当月产出 ${outputText(group)} · 现金 ${formatNumber(group.cash, 0)} 元${extra}`;
+        }
+        return `<strong>${escapeHtml(group.label)} · 第 ${currentStat().tick} 月</strong><br>
+          ${formatInt(group.count)} 家企业 · 员工 ${formatInt(group.employees)} 人<br>
+          设备 ${formatInt(group.equipment)} 台 · 等级 ${escapeHtml(breakdownText(group))}<br>
+          当月产出 ${outputText(group)} · 企业现金 ${formatNumber(group.cash, 0)} 元<br>
+          <span style="color:#6d786d">同地块同行业同等级合并显示；等级为此组企业最高设备等级。</span>`;
+      }
+
+      function makeEntity(tip) {
+        const node = svgEl("g", { class: "entity" });
+        node.__ecoTip = tip;
+        return node;
+      }
+      function drawFactory(group, extraScale) {
+        const node = makeEntity(groupTip(group));
+        const tier = Math.max(0, group.tier);
+        const scale = (0.55 + tier * 0.042) * extraScale;
+        const color = INDUSTRY_COLORS[group.industry] || "var(--steel)";
+        const label = group.label;
+        const g = svgEl("g", { transform: `scale(${scale.toFixed(3)})` }, node);
+        svgEl("rect", { x: -58, y: 0, width: 116, height: 58, rx: 8, fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+        svgEl("polygon", { points: "-66,0 0,-46 66,0", fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+        svgEl("rect", { x: 28, y: -42, width: 20, height: 34, rx: 4, fill: "#4b4b45", stroke: "#2f3b32", "stroke-width": 2 }, g);
+        svgEl("rect", { x: -40, y: 18, width: 26, height: 22, rx: 3, fill: "#f4e9c8", opacity: 0.9 }, g);
+        svgEl("rect", { x: 2, y: 18, width: 26, height: 22, rx: 3, fill: "#f4e9c8", opacity: 0.9 }, g);
+        svgEl("circle", { cx: -28, cy: 64, r: 13, fill: "#3d403b" }, g);
+        svgEl("circle", { cx: 28, cy: 64, r: 13, fill: "#3d403b" }, g);
+        svgEl("text", { class: "scale-badge", x: 48, y: -42 }, g).textContent = group.tier >= 0 ? String(group.tier) : "—";
+        if (group.count > 1) {
+          svgEl("circle", { class: "count-badge", cx: 44, cy: 74, r: 21 }, g);
+          svgEl("text", { class: "count-text", x: 44, y: 80 }, g).textContent = `×${group.count}`;
+        }
+        svgEl("text", { class: "entity-label", x: 0, y: 99 }, g).textContent = label;
+        return node;
+      }
+      function drawEquipment(group, extraScale) {
+        const node = makeEntity(groupTip(group));
+        const color = INDUSTRY_COLORS[group.industry] || "var(--steel)";
+        const label = group.label;
+        const scale = 0.82 * extraScale;
+        const g = svgEl("g", { transform: `scale(${scale.toFixed(3)})` }, node);
+        svgEl("rect", { x: -50, y: -18, width: 100, height: 44, rx: 9, fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+        svgEl("circle", { cx: -30, cy: 38, r: 16, fill: "#3d403b", stroke: "#20251f", "stroke-width": 2 }, g);
+        svgEl("circle", { cx: 30, cy: 38, r: 16, fill: "#3d403b", stroke: "#20251f", "stroke-width": 2 }, g);
+        svgEl("rect", { x: -22, y: -48, width: 44, height: 30, rx: 6, fill: color, stroke: "#2f3b32", "stroke-width": 3 }, g);
+        svgEl("circle", { cx: 0, cy: 0, r: 17, fill: "#f4e9c8", opacity: 0.9 }, g);
+        svgEl("text", { class: "scale-badge", x: 45, y: -38 }, g).textContent = tierText(group);
+        svgEl("circle", { class: "count-badge", cx: 43, cy: 58, r: 21 }, g);
+        svgEl("text", { class: "count-text", x: 43, y: 64 }, g).textContent = `×${group.units}`;
+        svgEl("text", { class: "entity-label", x: 0, y: 92 }, g).textContent = label;
+        svgEl("text", { class: "small-note", x: 0, y: 112 }, g).textContent = `${label} ×${group.units} · 等级 ${tierText(group)}`;
+        return node;
+      }
+      function drawHousing(group) {
+        const node = makeEntity(groupTip(group));
+        const g = svgEl("g", { transform: "scale(0.88)" }, node);
+        [-26, 0, 26].forEach((x, index) => {
+          const color = index === 1 ? "#e7dcc3" : "#d8c8aa";
+          svgEl("rect", { x: x - 13, y: 0, width: 26, height: 20, rx: 2, fill: color, stroke: "#7d6f57", "stroke-width": 2 }, g);
+          svgEl("polygon", { points: `${x - 17},0 ${x},-13 ${x + 17},0`, fill: "var(--housing)", stroke: "#5f7485", "stroke-width": 2 }, g);
+          svgEl("rect", { x: x - 4, y: 8, width: 8, height: 12, fill: "#6f8fa4" }, g);
+        });
+        svgEl("text", { class: "entity-label", x: 0, y: 42 }, g).textContent = "住房";
+        svgEl("text", { class: "small-note", x: 0, y: 59 }, g).textContent = `满足率 ${formatPercent(group.satisfaction, 0)}`;
+        return node;
+      }
+      function placeGroup(node, x, y) {
+        node.setAttribute("transform", `translate(${x} ${y})`);
+        svg.appendChild(node);
+      }
+      function positionsFor(count) {
+        if (count <= 1) return [[0, 4, 1.0]];
+        if (count === 2) return [[-61, 8, 0.64], [61, 8, 0.64]];
+        if (count === 3) return [[-72, 64, 0.52], [0, -16, 0.6], [72, 64, 0.52]];
+        return [[-66, 42, 0.5], [66, 42, 0.5], [-66, 135, 0.5], [66, 135, 0.5]];
+      }
+      function drawEmptyNote(tile, text) {
+        svgEl("text", { class: "empty-note", x: tile.cx, y: tile.cy + 110 }, svg).textContent = text;
+      }
+
+      function renderMap(stat) {
+        svg.innerHTML = "";
+        MAP_ORDER.forEach(drawTile);
+        const tiles = stat.map && stat.map.tiles ? stat.map.tiles : {};
+        for (const key of MAP_ORDER) {
+          const tile = HEXES[key];
+          const groups = tiles[key] || [];
+          if (key === "city") {
+            const housing = groups.find((g) => g.kind === "housing");
+            const factories = groups.filter((g) => g.kind === "factory");
+            if (housing) {
+              const node = drawHousing(housing);
+              placeGroup(node, tile.cx + 74, tile.cy - 78);
+            }
+            const positions = positionsFor(factories.length);
+            factories.slice(0, positions.length).forEach((group, index) => {
+              const [x, y, scale] = positions[index];
+              placeGroup(drawFactory(group, scale), tile.cx + x, tile.cy + y + 5);
+            });
+            if (!factories.length) drawEmptyNote(tile, "无活跃纺织/施工企业");
+          } else if (key === "agriculture") {
+            const equipmentGroups = groups.filter((g) => g.kind === "equipment");
+            const group = equipmentGroups[0];
+            if (group) {
+              placeGroup(drawEquipment(group, 1.0), tile.cx, tile.cy + 2);
+            } else {
+              drawEmptyNote(tile, "无农业设备");
+            }
+          } else if (key === "mine") {
+            const equipmentGroups = groups.filter((g) => g.kind === "equipment" && (g.firms > 0 || g.units > 0));
+            const positions = equipmentGroups.length >= 2 ? [[-61, 4, 0.64], [61, 4, 0.64]] : [[0, 4, 0.9]];
+            equipmentGroups.slice(0, positions.length).forEach((group, index) => {
+              const [x, y, scale] = positions[index];
+              placeGroup(drawEquipment(group, scale), tile.cx + x, tile.cy + y);
+            });
+            if (!equipmentGroups.length) drawEmptyNote(tile, "无活跃煤矿/铁矿");
+          } else {
+            const positions = positionsFor(groups.length);
+            groups.slice(0, positions.length).forEach((group, index) => {
+              const [x, y, scale] = positions[index];
+              placeGroup(drawFactory(group, scale), tile.cx + x, tile.cy + y);
+            });
+            if (!groups.length) drawEmptyNote(tile, "无活跃企业");
+          }
+        }
+
+        svg.querySelectorAll(".entity").forEach((node) => {
+          node.addEventListener("mouseenter", (event) => {
+            tooltip.innerHTML = node.__ecoTip || "";
+            tooltip.classList.add("show");
+            moveTooltip(event);
+          });
+          node.addEventListener("mousemove", moveTooltip);
+          node.addEventListener("mouseleave", () => tooltip.classList.remove("show"));
+          node.addEventListener("click", (event) => {
+            tooltip.innerHTML = node.__ecoTip || "";
+            tooltip.classList.add("show");
+            moveTooltip(event);
+          });
+        });
+        $("map-caption").textContent = `第 ${stat.tick} 月快照 · ${formatInt(activeFirmTotal(stat))} 家活跃企业 · ${formatInt(stat.active_projects)} 个活跃项目 · 数据与卡片同一快照`;
+      }
+
+      function moveTooltip(event) {
+        tooltip.style.left = event.clientX + "px";
+        tooltip.style.top = event.clientY + "px";
+      }
+
+      // ------------------------------------------------------------------
+      // 领域详情
+      // ------------------------------------------------------------------
+      function renderDetail(domainKey) {
+        const d = state.domains[domainKey];
+        if (!d) return;
+        state.detailDomain = domainKey;
+        $("detail-title").textContent = d.title;
+        $("detail-subtitle").textContent = d.subtitle;
+        $("detail-kpis").innerHTML = d.kpis.map(([label, value]) =>
+          `<div class="kpi"><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span></div>`).join("");
+        $("detail-chart").innerHTML = renderChart(d.chartValues, d.color);
+        $("detail-rows").innerHTML = d.table.map(([label, value]) =>
+          `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`).join("");
+        $("detail-note").textContent = d.note || "";
+        $("detail").classList.remove("hidden");
+      }
+
+      function renderChart(values, color) {
+        const width = 760;
+        const height = 190;
+        const padLeft = 48;
+        const padRight = 18;
+        const padTop = 18;
+        const padBottom = 26;
+        if (!values || !values.length) return "";
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const span = max - min || 1;
+        const xOf = (index) => padLeft + (index / Math.max(values.length - 1, 1)) * (width - padLeft - padRight);
+        const yOf = (value) => height - padBottom - ((value - min) / span) * (height - padTop - padBottom);
+        const points = values.map((value, index) => `${xOf(index).toFixed(1)},${yOf(value).toFixed(1)}`).join(" ");
+        const area = `M ${xOf(0)} ${height - padBottom} L ${points.replace(/ /g, " L ")} L ${xOf(values.length - 1)} ${height - padBottom} Z`;
+        const grid = [0, 0.5, 1].map((fraction) => {
+          const value = max - span * fraction;
+          const y = yOf(value);
+          return `<line class="chart-grid-line" x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}"></line>
+            <text class="chart-axis-text" x="4" y="${(y + 3).toFixed(1)}">${escapeHtml(shortValue(value))}</text>`;
+        }).join("");
+        const lastX = xOf(values.length - 1);
+        const lastY = yOf(values[values.length - 1]);
+        return `<defs>
+            <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${color}" stop-opacity="0.28"></stop>
+              <stop offset="100%" stop-color="${color}" stop-opacity="0"></stop>
+            </linearGradient>
+          </defs>
+          ${grid}
+          <path d="${area}" fill="url(#chartFill)"></path>
+          <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          <circle cx="${lastX}" cy="${lastY}" r="3.4" fill="${color}" stroke="#fffcf5" stroke-width="1.5"></circle>
+          <text class="chart-value-text" x="${width - padRight}" y="${(lastY - 8).toFixed(1)}" text-anchor="end">末值 ${escapeHtml(shortValue(values[values.length - 1]))}</text>
+          <text class="chart-axis-text" x="${padLeft}" y="${height - 7}">第 1 月</text>
+          <text class="chart-axis-text" x="${width - padRight}" y="${height - 7}" text-anchor="end">第 ${state.selected + 1} 月</text>`;
+      }
+
+      $("close-detail").addEventListener("click", () => {
+        state.detailDomain = null;
+        $("detail").classList.add("hidden");
+      });
+      $("detail").addEventListener("click", (event) => {
+        if (event.target === $("detail")) {
+          state.detailDomain = null;
+          $("detail").classList.add("hidden");
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          state.detailDomain = null;
+          $("detail").classList.add("hidden");
+        }
+      });
+
+      // ------------------------------------------------------------------
+      // 启动参数：?autorun=1&months=240&seed=1&mode=fast|play&intervalMs=300
+      // 可选 &tick=180&detail=industry；游玩模式会在运行完成后应用。
+      // ------------------------------------------------------------------
+      const params = new URLSearchParams(location.search);
+      if (params.get("autorun") === "1") {
+        const monthParam = Number(params.get("months") || "240");
+        const seedParam = Number(params.get("seed") || "1");
+        const months = Number.isInteger(monthParam) ? Math.max(1, Math.min(600, monthParam)) : 240;
+        const seed = Number.isInteger(seedParam) ? Math.max(0, Math.min(2147483647, seedParam)) : 1;
+        const mode = params.get("mode") === "play" ? "play" : "fast";
+        const interval = normalizeInterval(params.get("intervalMs") || "300");
+        setActiveMonths(months);
+        setModeSelection(mode, interval);
+        const applyQuerySelection = () => {
+          const tickParam = Number(params.get("tick") || months);
+          if (Number.isFinite(tickParam)) {
+            state.selected = Math.max(0, Math.min(state.months - 1, Math.trunc(tickParam) - 1));
+            renderSelected();
+          }
+          const detailParam = params.get("detail");
+          if (detailParam && state.domains[detailParam]) renderDetail(detailParam);
+        };
+        const result = startSimulation(months, seed, mode, interval);
+        if (result && typeof result.then === "function") {
+          result.then((ok) => { if (ok) applyQuerySelection(); });
+        } else if (result) {
+          applyQuerySelection();
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

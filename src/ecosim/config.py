@@ -191,6 +191,38 @@ for prefix, industry, label, capacity, workers, good, t0, upgrade, build in [
     )
 
 
+# 手工 t0 启动配方：不需要资本品，专门用于死掉的行业重新进入/重建。
+# 产能刻意做小，正常扩张仍必须使用 2^N 设备；只在行业没有活跃企业时使用。
+_MANUAL_SPECS = [
+    ("brick_manual", Industry.BRICK_FACTORY, "手工砖窑", 10.0, 10),
+    ("steel_manual", Industry.STEEL_MILL, "手工炼钢炉", 5.0, 5),
+    ("machinery_manual", Industry.MACHINERY_FACTORY, "手工机械工坊", 1.0, 5),
+    ("construction_manual", Industry.CONSTRUCTION, "手工施工队", 5.0, 10),
+    ("textile_manual", Industry.TEXTILE_MILL, "手工织机", 10.0, 5),
+]
+for key, industry, label, capacity, workers in _MANUAL_SPECS:
+    EQUIPMENT[key] = EquipmentType(
+        key=key,
+        label=label,
+        industry=industry,
+        capacity=capacity,
+        workers=workers,
+        capital_good=None,
+        capital_cost=0.0,
+        build_months=0,
+        power=0.0,
+        building_cost=0.0,
+    )
+
+MANUAL_EQUIPMENT: Dict[Industry, str] = {
+    Industry.BRICK_FACTORY: "brick_manual",
+    Industry.STEEL_MILL: "steel_manual",
+    Industry.MACHINERY_FACTORY: "machinery_manual",
+    Industry.CONSTRUCTION: "construction_manual",
+    Industry.TEXTILE_MILL: "textile_manual",
+}
+
+
 SECTOR_PARAMS: Dict[Industry, SectorParams] = {
     Industry.AGRICULTURE: SectorParams(
         industry=Industry.AGRICULTURE,

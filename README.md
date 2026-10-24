@@ -5,9 +5,10 @@
 
 长期目标是用 LLM 扮演经理和董事；当前里程碑是先把规则驱动的经济内核做扎实。
 
-> 状态：**V0.3.2 — 2^N 设备表版，HTML 发行版尚未实现。**
-> 引擎可运行、固定随机种子可复现，并有回归测试。LLM 智能体、合同、期货订单和完整界面
-> 是刻意推迟的内容。
+> 状态：**V0.4 — 负反馈修复与历史阶段工作流；HTML 发行版尚未同步。**
+> 引擎可运行、固定随机种子可复现，并有回归测试。新增古典/Keynesian/MMT 三种
+> 政策制度、生产—库存闭环、需求约束投资、劳动市场修正与粮食平准库存。
+> LLM 智能体、合同、期货订单和完整界面仍是刻意推迟的内容。
 
 ## 快速开始
 
@@ -35,6 +36,27 @@ python -m ecosim --months 240 --seed 1 --json artifacts/run.json
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
+
+## 历史阶段与政策制度
+
+同一个经济内核可以通过 `--regime` 切换政策/货币制度，用于比较不同历史阶段：
+
+- `classical`（默认）：pre-Keynesian 自由放任；金本位、货币总量守恒、无政府；
+  粮食平准库存以私人粮商形式存在。
+- `keynesian`：福利国家；工资/利润税、失业救济、公共投资、国债；金本位、货币守恒。
+- `mmt`：主权货币 + 就业保障；央行购买国债/创造货币，政府作为最后雇主，
+  失业者可以进入公共工程。
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m ecosim --months 240 --seed 1 --regime classical
+python -m ecosim --months 240 --seed 1 --regime keynesian
+python -m ecosim --months 240 --seed 1 --regime mmt
+```
+
+政策/货币/税收/救济/公共投资/就业保障参数集中在
+`src/ecosim/scenarios.py` 的 `ScenarioConfig`；设计说明见
+[[docs/decisions/0004-historical-regimes.md]]。
 
 ## 可选的 LLM 经理探针
 
@@ -79,8 +101,10 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 
 - 完整 LLM 经理/董事智能体与管理层级；当前只有本地探针，未接入仿真。
 - 合同、期货/订单生产、跨月平滑采购。
-- HTML 发行版；当前入口是命令行。
-- 场景 0（铁器时代）和场景 2（晚期资本主义）。
+- HTML 发行版尚未同步 V0.4；当前入口是命令行。
+- L2 成本加成 + LES 需求仍是实验分支（`price_regime="markup"` /
+  `demand_regime="les"`），默认仍是成本价格带 + 固定篮子。
+- 场景 0（铁器时代）和场景 2（晚期资本主义）的完整配置。
 - 多种资本品；V0.3 使用一个通用 `MACHINERY` 商品，钢铁厂用 `BRICK`，机床用 `STEEL`。
 
 ## 交付形态

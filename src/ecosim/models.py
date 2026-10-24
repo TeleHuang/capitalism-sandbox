@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from .config import FOOD_PER_WORKER, HOURS_OPTIONS
+from .config import (
+    COMFORT_SAVINGS,
+    FOOD_PER_WORKER,
+    HOURS_OPTIONS,
+    LEISURE_SAVINGS,
+)
 from .enums import Good, Industry
 
 
@@ -25,6 +30,7 @@ class Worker:
     hours: int = 16
     alive: bool = True
     hunger_months: int = 0
+    ui_months: int = 0
     is_owner_operator: bool = False
     land_owned: float = 0.0
 
@@ -60,9 +66,9 @@ class Worker:
         # 饥饿优先于闲暇：没有食物的工人会全职工作。
         if self.food + 1e-9 < 0.10 or self.living_standard in ("survival", "subsistence"):
             return 16
-        if self.cash >= 120.0 and current > 8:
+        if self.cash >= LEISURE_SAVINGS and current > 8:
             return 8
-        if self.cash >= 60.0 and current > 12:
+        if self.cash >= COMFORT_SAVINGS and current > 12:
             return 12
         if self.cash < basket * 2.0 and current != 16:
             return 16
@@ -88,6 +94,18 @@ class Enterprise:
     bankruptcy_months: int = 0
     modernization_capable: bool = True
     smoothed_sales: float = 0.0
+
+    # V0.4 负反馈：需求预测、计划产出与库存目标
+    demand_forecast: float = 0.0
+    plan_ratio: float = 1.0
+    markup: float = 0.15
+    planned_output: float = 0.0
+    target_inventory_months: float = 2.0
+    last_demand: float = 0.0
+    last_unmet: float = 0.0
+    last_fill_rate: float = 1.0
+    dormant_months: int = 0
+    replacement_months: int = 0
 
     # 市场 / 会计状态
     ask_prices: Dict[Good, float] = field(default_factory=dict)
@@ -182,10 +200,72 @@ class InvestmentProject:
 
 
 @dataclass
+class FoodReserve:
+    """粮食平准库存：高价释放、低价收储。
+
+    古典剧本里可以理解为私人粮商；Keynesian/MMT 里是政府战略储备。
+    它只参与食品市场，不参与财政/货币创造。
+    """
+
+    cash: float = 0.0
+    food: float = 0.0
+
+
+@dataclass
+class AssetPool:
+    """破产/遗产回收的资产池，避免资产凭空消失。
+
+    当前版本还没有二手设备市场，先记在池子里；后续新进入者可以折价购买。
+    """
+
+    inventory: Dict[Good, float] = field(default_factory=empty_goods)
+    equipment: Dict[str, int] = field(default_factory=dict)
+    land: float = 0.0
+
+
+@dataclass
 class Bank:
     cash: float
     interest_rate: float = 0.01
     loans: Dict[str, float] = field(default_factory=dict)
+    deposits: Dict[str, float] = field(default_factory=dict)
+    deposit_rate: float = 0.002
+    write_offs: float = 0.0
+
+    def deposit(self, agent, amount: float) -> float:
+        """吸收存款：现金从储户转到银行，货币总量不变。"""
+        amount = max(0.0, min(amount, getattr(agent, "cash", 0.0)))
+        if amount <= 1e-9:
+            return 0.0
+        agent.cash -= amount
+        self.cash += amount
+        self.deposits[agent.id] = self.deposits.get(agent.id, 0.0) + amount
+        return amount
+
+    def pay_deposit_interest(self, agents: Dict[str, object]) -> float:
+        """支付存款利息；只给仍存活/存在的储户记账。
+
+        死亡储户的存款留在银行，不再支付利息；否则利息会从货币审计中消失。
+        """
+        total = sum(self.deposits.values())
+        if total <= 1e-9 or self.cash <= 1e-9:
+            return 0.0
+        due = total * self.deposit_rate
+        factor = min(1.0, self.cash / due) if due > 0 else 0.0
+        credited = 0.0
+        for agent_id, amount in list(self.deposits.items()):
+            agent = agents.get(agent_id)
+            if agent is None or (
+                hasattr(agent, "alive") and not getattr(agent, "alive")
+            ):
+                continue
+            interest = amount * self.deposit_rate * factor
+            if interest <= 1e-9:
+                continue
+            agent.cash += interest
+            credited += interest
+        self.cash -= credited
+        return credited
 
     def lend(self, enterprise: Enterprise, amount: float) -> float:
         amount = max(0.0, min(amount, self.cash))
@@ -225,6 +305,7 @@ class LandMarket:
     price: float
     owners: Dict[str, float] = field(default_factory=dict)       # 工人 ID -> 亩数
     enterprise_by_owner: Dict[str, str] = field(default_factory=dict)
+    estate_land: float = 0.0                                      # 死亡自耕农的待售土地（亩）
 
     @property
     def smallholder_land(self) -> float:

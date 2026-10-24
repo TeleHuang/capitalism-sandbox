@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 
 from .config import (
     BASE_GRAIN_YIELD,
@@ -49,12 +49,22 @@ def farm_requirements(enterprise: Enterprise) -> tuple[int, float]:
     return max(1, math.ceil(enterprise.land / land_per_worker)), power
 
 
-def desired_workers(enterprise: Enterprise) -> int:
+def desired_workers(enterprise: Enterprise, plan: float = 1.0) -> int:
+    """按生产计划缩放用工需求。
+
+    plan=1.0 时保持原有的满产用工，旧测试/旧调用不受影响；plan<1 时
+    释放冗余工人，让他们能被其它行业雇佣。农业至少保留 1 个所有者。
+    """
     if enterprise.industry == Industry.AGRICULTURE:
         required, _ = farm_requirements(enterprise)
-        return required
-    _, required, _ = equipment_summary(enterprise)
-    return required
+    else:
+        _, required, _ = equipment_summary(enterprise)
+    if required <= 0:
+        return 0
+    plan = max(0.0, min(1.0, plan))
+    if plan <= 1e-9:
+        return 1 if enterprise.industry == Industry.AGRICULTURE else 0
+    return max(1, int(math.ceil(required * plan)))
 
 
 def capacity_at_skill_one(enterprise: Enterprise) -> float:
@@ -92,13 +102,18 @@ def produce(engine: "Engine", enterprise: Enterprise) -> float:
 
     effective_labor = sum(w.effective_labor for w in workers)
     skill = average_skill(workers)
+    plan = max(0.0, min(1.0, enterprise.plan_ratio))
+    if plan <= 1e-9:
+        enterprise.last_output = 0.0
+        enterprise.last_input_used = {}
+        return 0.0
 
     if enterprise.industry == Industry.AGRICULTURE:
         required, _ = farm_requirements(enterprise)
         if enterprise.land <= 0 or required <= 0:
             enterprise.last_output = 0.0
             return 0.0
-        utilisation = min(1.0, effective_labor / required)
+        utilisation = min(plan, effective_labor / required)
         base_capacity = enterprise.land * BASE_GRAIN_YIELD * skill
         multiplier = 1.0
         fertilizer_used = 0.0
@@ -123,7 +138,7 @@ def produce(engine: "Engine", enterprise: Enterprise) -> float:
         enterprise.last_output = 0.0
         return 0.0
 
-    utilisation = min(1.0, effective_labor / required)
+    utilisation = min(plan, effective_labor / required)
     theoretical = capacity * utilisation * skill
 
     params = SECTOR_PARAMS[enterprise.industry]
@@ -169,7 +184,8 @@ def full_capacity_unit_cost(
         return 0.0
     effective = sum(w.effective_labor for w in workers)
     skill = average_skill(workers) or 1.0
-    output = capacity * min(1.0, effective / required) * skill
+    plan = max(0.0, min(1.0, enterprise.plan_ratio))
+    output = capacity * min(plan, effective / required) * skill
     if output <= 1e-9:
         return 0.0
 
@@ -262,6 +278,7 @@ def representative_roi(
     prices: Dict[Good, float],
     wage: float,
     land_price: float,
+    demand: Optional[float] = None,
 ) -> float:
     """一台新设备（或一个标准农场）的预期月资本回报率。
 
@@ -276,6 +293,10 @@ def representative_roi(
         power = et.power
         required = max(1, math.ceil(land / (LAND_PER_WORKER_BASE * (1.0 + power))))
         output = land * BASE_GRAIN_YIELD * FERTILIZER_YIELD_MULTIPLIER * SKILL_MAX
+        if demand is not None:
+            output = min(output, max(0.0, demand))
+        if output <= 1e-9:
+            return -1.0
         revenue = output * prices.get(params.output, 0.0)
         fertilizer = land * FERTILIZER_PER_MU * prices.get(Good.FERTILIZER, 0.0)
         wages = required * wage
@@ -284,6 +305,10 @@ def representative_roi(
         return profit / capital if capital > 0 else -1.0
 
     output = et.capacity * SKILL_MAX
+    if demand is not None:
+        output = min(output, max(0.0, demand))
+    if output <= 1e-9:
+        return -1.0
     revenue = output * prices.get(params.output, 0.0)
     input_cost = sum(
         ratio * output * prices.get(good, 0.0) for good, ratio in params.inputs.items()

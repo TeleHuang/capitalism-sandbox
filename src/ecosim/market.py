@@ -5,7 +5,14 @@ from typing import Any, Dict, List
 
 from .config import PRICE_FLOOR, PRICE_STEP, SECTOR_PARAMS
 from .enums import Good
-from .models import Capitalist, Enterprise, InvestmentProject, Worker
+from .government import Government
+from .models import (
+    Capitalist,
+    Enterprise,
+    FoodReserve,
+    InvestmentProject,
+    Worker,
+)
 
 
 @dataclass
@@ -52,6 +59,7 @@ class Market:
         }
         self.consumption_spending = 0.0
         self.investment_spending = 0.0
+        self.government_spending = 0.0
         # 基于成本的安全轨，由引擎更新。它们不能替代竞争，但可以
         # 防止薄市场把价格推到重置成本的数倍，或砸到成本的零头。
 
@@ -106,6 +114,8 @@ class Market:
                 # 卖方库存约束（防御性；每个卖方只挂一张单）。
                 if isinstance(s.agent, Enterprise):
                     deal_volume = min(deal_volume, s.agent.inv(good))
+                elif isinstance(s.agent, FoodReserve):
+                    deal_volume = min(deal_volume, s.agent.food)
 
                 if deal_volume <= 1e-9:
                     if buyer_cash <= 1e-9:
@@ -124,6 +134,8 @@ class Market:
                     self.consumption_spending += amount
                 if isinstance(b.agent, InvestmentProject):
                     self.investment_spending += amount
+                if isinstance(b.agent, Government):
+                    self.government_spending += amount
                 if isinstance(b.agent, Enterprise):
                     inputs = SECTOR_PARAMS[b.agent.industry].inputs
                     if good in inputs:
@@ -206,6 +218,13 @@ class Market:
             elif good == Good.BUILDING:
                 agent.housing += quantity
             return
+        if isinstance(agent, Government):
+            agent.inventory[good] = agent.inventory.get(good, 0.0) + quantity
+            return
+        if isinstance(agent, FoodReserve):
+            if good == Good.FOOD:
+                agent.food += quantity
+            return
         if isinstance(agent, (Enterprise, InvestmentProject)):
             agent.inventory[good] = agent.inventory.get(good, 0.0) + quantity
 
@@ -213,3 +232,5 @@ class Market:
     def _deliver_good(agent: Any, good: Good, quantity: float) -> None:
         if isinstance(agent, Enterprise):
             agent.inventory[good] = max(0.0, agent.inventory.get(good, 0.0) - quantity)
+        elif isinstance(agent, FoodReserve) and good == Good.FOOD:
+            agent.food = max(0.0, agent.food - quantity)

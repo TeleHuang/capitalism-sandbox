@@ -9,6 +9,7 @@ from .config import (
     BANK_CASH,
     BANK_INTEREST_RATE,
     BANK_LOAN_MONTHS,
+    BASE_GRAIN_YIELD,
     CAPITALIST_CONSUMPTION_RATE,
     CAPITALIST_FOOD,
     CAPITALIST_CLOTH,
@@ -16,14 +17,18 @@ from .config import (
     CAPITALIST_MIN_CONSUMPTION,
     CLOTH_PER_WORKER,
     COMFORT_MULTIPLIER,
+    COMFORT_SAVINGS,
+    LEISURE_SAVINGS,
     DEPRECIATION_MONTHS,
     DIVIDEND_PAYOUT,
     EQUIPMENT,
+    FERTILIZER_PER_MU,
     FOOD_PER_WORKER,
     HOUSING_PER_WORKER,
     INITIAL_LAND_PRICE,
     INITIAL_PRICES,
     INVESTMENT_HURDLE,
+    MANUAL_EQUIPMENT,
     MAX_ACTIVE_PROJECTS,
     MAX_NEW_FIRMS_PER_TICK,
     MAX_PROJECTS_PER_TICK,
@@ -42,24 +47,30 @@ from .decisions import (
     input_needs,
     production_plan,
     should_invest,
+    should_switch,
     wants_fertilizer,
     wage_floor,
 )
 from .enums import GOOD_LABELS, Good, Industry
+from .government import Government, MoneyRegime, PolicyRegime
 from .land import run_land_market
 from .market import Market
 from .models import (
+    AssetPool,
     Bank,
     Capitalist,
     Enterprise,
+    FoodReserve,
     InvestmentProject,
     LandMarket,
     Worker,
 )
 from .production import (
     capital_value,
+    capacity_at_skill_one,
     desired_workers,
     equipment_cost,
+    equipment_value,
     inventory_value,
     net_worth,
     produce,
@@ -79,6 +90,17 @@ class Engine:
         self.market = Market(INITIAL_PRICES)
         self.land = LandMarket(TOTAL_LAND_MU, INITIAL_LAND_PRICE)
         self.bank = Bank(BANK_CASH, BANK_INTEREST_RATE)
+        self.asset_pool = AssetPool()
+        self.food_reserve = FoodReserve()
+        self.government: Optional[Government] = None
+        # 古典剧本允许工资低于制度性生存线；Keynesian/MMT 保持最低工资。
+        self.wage_floor_scale: float = 1.0
+        # "band" = 参考价 + 成本价格带；"markup" = 成本加成 + 软走廊。
+        self.price_regime: str = "band"
+        # "fixed" = 固定温饱篮子；"les" = Stone-Geary 需求（价格弹性）。
+        self.demand_regime: str = "fixed"
+        # 是否启用银行存款中介（Keynesian/MMT 启用；古典默认关闭）。
+        self.bank_intermediation: bool = False
         self.stats: List[dict] = []
         self.money_initial = 0.0
         self.dead_this_month = 0
@@ -87,6 +109,7 @@ class Engine:
         self._next_enterprise = 0
         self._next_project = 0
         self._zero_output_streak: Dict[str, int] = defaultdict(int)
+        self._last_manual_entry: Dict[Industry, int] = {}
         self._warnings: List[str] = []
 
     # ------------------------------------------------------------------
@@ -136,6 +159,8 @@ class Engine:
             + sum(e.cash for e in self.enterprises.values() if e.active)
             + sum(p.cash for p in self.projects.values() if p.active)
             + self.bank.cash
+            + self.food_reserve.cash
+            + (self.government.cash if self.government is not None else 0.0)
         )
 
     # ------------------------------------------------------------------
@@ -195,7 +220,42 @@ class Engine:
             is_household=False,
             modernization_capable=True,
         )
+        enterprise.demand_forecast = land_mu * BASE_GRAIN_YIELD * 2.0
+        enterprise.target_inventory_months = 6.0
         return enterprise
+
+    def _bootstrap_manual_entry(self, industry: Industry, key: str) -> bool:
+        """行业死掉后，用无资本品的手工设备重启一次。
+
+        只允许在没有活跃企业的行业使用，且每 12 个月最多一次；
+        正常扩张仍必须使用 2^N 设备，避免免费 t0 削弱资本品需求。
+        """
+        if self.tick - self._last_manual_entry.get(industry, -999) < 12:
+            return False
+        candidates = [
+            capitalist
+            for capitalist in self.capitalists.values()
+            if capitalist.cash >= 500.0
+        ]
+        if not candidates:
+            return False
+        candidates.sort(
+            key=lambda c: (c.owned_count(self.enterprises), -c.cash, c.id)
+        )
+        owner = candidates[0]
+        setup_cost = 300.0
+        owner.cash -= setup_cost
+        enterprise = self.create_enterprise(
+            industry,
+            owner_id=owner.id,
+            cash=setup_cost,
+            modernization_capable=True,
+        )
+        enterprise.add_equipment(key, 1)
+        enterprise.demand_forecast = 1.0
+        enterprise.target_inventory_months = 1.0
+        self._last_manual_entry[industry] = self.tick
+        return True
 
     def _start_project(
         self,
@@ -256,16 +316,25 @@ class Engine:
         for enterprise in self.enterprises.values():
             enterprise.reset_month_flows()
 
+        if self.government is not None:
+            self.government.reset_month()
         self._update_skills()
+        self._update_expectations_and_plans()
+        if self.bank_intermediation:
+            self._bank_intermediation()
         self._labor_market()
         self._pay_wages()
+        self._pay_government_wages()
         self._produce_all()
+        self._produce_government()
         self._update_price_bands()
         run_land_market(self)
         self._investment_decisions()
 
         self._submit_sell_orders()
         self._submit_household_orders()
+        self._submit_food_reserve_orders()
+        self._submit_government_orders()
         self._submit_input_orders()
         self._submit_project_orders()
 
@@ -278,10 +347,13 @@ class Engine:
 
         self._progress_projects()
         self._finance()
+        self._government_settlement()
+        self._cleanup_dormant()
         self._consume_and_demographics()
         stat = self._record_stats()
         self.market.consumption_spending = 0.0
         self.market.investment_spending = 0.0
+        self.market.government_spending = 0.0
         return stat
 
     # ------------------------------------------------------------------
@@ -293,24 +365,118 @@ class Engine:
                 continue
             worker.skill = min(SKILL_MAX, worker.skill + SKILL_GROWTH_PER_MONTH)
 
+    def _update_expectations_and_plans(self) -> None:
+        """L1：按库存/欠交/需求预测生成生产计划。
+
+        计划必须在生产之前生成；不能再用“生产后、销售前”的库存采样。
+        计划同时约束产出、用工和采购，避免“计划只影响采购、产出仍满产”。
+        """
+        active_by_industry = {
+            industry: len(self.active_enterprises(industry)) for industry in Industry
+        }
+        capacity_by_industry: Dict[Industry, float] = defaultdict(float)
+        for enterprise in self.active_enterprises():
+            capacity_by_industry[enterprise.industry] += capacity_at_skill_one(enterprise)
+        food_stock = sum(
+            enterprise.inv(Good.FOOD)
+            for enterprise in self.active_enterprises(Industry.AGRICULTURE)
+        )
+        alive_workers = sum(1 for worker in self.workers.values() if worker.alive)
+        monthly_food_need = max(1.0, alive_workers * FOOD_PER_WORKER)
+        essential = {
+            Good.COAL,
+            Good.IRON_ORE,
+            Good.STEEL,
+            Good.BRICK,
+            Good.MACHINERY,
+            Good.BUILDING,
+            Good.FERTILIZER,
+        }
+
+        for enterprise in self.active_enterprises():
+            params = SECTOR_PARAMS[enterprise.industry]
+            out = params.output
+            history = self.market.history[out]
+            last_sales = enterprise.last_sales.get(out, 0.0)
+            capacity = capacity_at_skill_one(enterprise)
+            total_capacity = capacity_by_industry[enterprise.industry]
+            if total_capacity > 1e-9:
+                share = capacity / total_capacity
+            else:
+                share = 1.0 / max(1, active_by_industry[enterprise.industry])
+            # 用行业总需求 × 产能份额，而不是单个企业的成交量。
+            # 否则在供不应求时，未成交的企业会把自己的预测越调越低。
+            observed = (
+                history.get("demand", 0.0) + history.get("unmet", 0.0)
+            ) * share
+            if enterprise.demand_forecast <= 1e-9:
+                enterprise.demand_forecast = max(observed, capacity * 0.1)
+            else:
+                enterprise.demand_forecast = (
+                    0.7 * enterprise.demand_forecast + 0.3 * observed
+                )
+            enterprise.last_demand = observed
+            enterprise.last_unmet = max(0.0, observed - last_sales)
+            enterprise.last_fill_rate = (
+                last_sales / observed if observed > 1e-9 else 1.0
+            )
+
+            if capacity <= 1e-9:
+                enterprise.plan_ratio = 0.0
+                enterprise.planned_output = 0.0
+                continue
+
+            inventory = enterprise.inv(out)
+            target = enterprise.target_inventory_months * enterprise.demand_forecast
+            # POUT 式部分调整：6 个月重建目标库存，避免一阶振荡。
+            desired = (
+                enterprise.demand_forecast
+                + max(0.0, target - inventory) / 6.0
+            )
+            plan = desired / capacity
+
+            # 中间投入/资本品是产业链的底仓：不能因为当期销售为 0
+            # 就完全封存，否则煤停→钢停→机械停→煤更停。
+            if inventory > 24.0 * max(
+                enterprise.demand_forecast, capacity * 0.05
+            ):
+                plan = min(plan, 0.1) if out in essential else 0.0
+            elif out in essential:
+                plan = max(plan, 0.1)
+
+            if out == Good.FOOD and food_stock < 3.0 * monthly_food_need:
+                # 食品是生存品：库存低于 3 个月时保持满产。
+                plan = max(plan, 1.0)
+
+            enterprise.plan_ratio = max(0.0, min(1.0, plan))
+            enterprise.planned_output = capacity * enterprise.plan_ratio
+
     def _labor_market(self) -> None:
         prices = self.market.reference_prices
-        floor = wage_floor(prices)
+        floor = wage_floor(prices) * getattr(self, "wage_floor_scale", 1.0)
         vacancies: Dict[str, int] = {}
         offers: Dict[str, float] = {}
+        food_stock = sum(
+            enterprise.inv(Good.FOOD)
+            for enterprise in self.active_enterprises(Industry.AGRICULTURE)
+        )
+        food_need = max(
+            1.0,
+            sum(1 for worker in self.workers.values() if worker.alive)
+            * FOOD_PER_WORKER,
+        )
+        food_security = food_stock < 3.0 * food_need
 
         for enterprise in self.active_enterprises():
             workers = self.enterprise_workers(enterprise)
-            required = desired_workers(enterprise)
+            required = desired_workers(enterprise, plan=enterprise.plan_ratio)
             effective = sum(w.effective_labor for w in workers)
             if required <= 0:
                 target = 0
-            elif effective + 1e-9 < required:
-                target = len(workers) + math.ceil((required - effective) / 0.75)
-            elif effective > required * 1.5:
-                target = max(required, math.ceil(required / 0.75))
             else:
-                target = len(workers)
+                # 精确用工：按当前平均工时折算需要的工人数，不再保留 1.33× 冗余。
+                avg_eff = effective / len(workers) if workers else 1.0
+                target = max(1, int(math.ceil(required / max(avg_eff, 0.5))))
             if enterprise.industry == Industry.AGRICULTURE and enterprise.is_household:
                 target = max(1, target)
 
@@ -329,6 +495,9 @@ class Engine:
                 workers = self.enterprise_workers(enterprise)
 
             offer = enterprise_wage_offer(self, enterprise)
+            if food_security and enterprise.industry == Industry.AGRICULTURE:
+                # 粮食安全溢价：食品库存低于 3 个月时，农场优先留住工人。
+                offer = min(offer * 1.30, WAGE_BASE * 5.0)
             offers[enterprise.id] = offer
             # 现有员工按企业当前工资报价支付。
             for worker in workers:
@@ -378,7 +547,7 @@ class Engine:
                     continue
                 best_id = hiring[0]
                 best_offer = offers[best_id]
-                if worker.wage + 1e-9 >= best_offer * (1.0 + 0.06):
+                if not should_switch(worker.wage, best_offer):
                     continue
                 old_enterprise = self.enterprises.get(worker.employer_id or "")
                 if old_enterprise is None:
@@ -395,6 +564,9 @@ class Engine:
                     if not hiring:
                         break
 
+        if self.government is not None and self.government.job_guarantee:
+            self._job_guarantee()
+
     def _hire(
         self,
         enterprise: Enterprise,
@@ -404,6 +576,11 @@ class Engine:
     ) -> None:
         if worker.industry != enterprise.industry:
             worker.skill = max(1.0, worker.skill * 0.75)
+        if (
+            self.government is not None
+            and worker.id in self.government.jg_workers
+        ):
+            self.government.jg_workers.remove(worker.id)
         worker.industry = enterprise.industry
         worker.employer_id = enterprise.id
         worker.wage = offer
@@ -430,11 +607,34 @@ class Engine:
             costs.sort()
             median = costs[len(costs) // 2]
             initial = INITIAL_PRICES[good]
-            self.market.ceilings[good] = max(median * 2.5, initial * 1.5)
+            # 安全轨必须有绝对上下限；否则单位成本（含工资）上涨会
+            # 把价格带越推越高，再通过工资下限形成工资—价格螺旋。
+            self.market.ceilings[good] = min(
+                max(median * 2.5, initial * 1.5), initial * 4.0
+            )
             # 不要让过剩把价格压到重置成本以下；那会形成
             # 通货紧缩陷阱：农场买不起化肥，农机投资也会停止。
 
-            self.market.floors[good] = max(median * 0.90, initial * 0.60)
+            self.market.floors[good] = min(
+                max(median * 0.90, initial * 0.60), initial * 2.0
+            )
+
+    def _bank_intermediation(self) -> None:
+        """金本位下的银行存款中介：把闲置现金吸到银行，再贷给企业。
+
+        存款/取款/利息都是现金转移，货币总量守恒。
+        """
+        for capitalist in self.capitalists.values():
+            if capitalist.cash > 10_000.0:
+                self.bank.deposit(
+                    capitalist, (capitalist.cash - 10_000.0) * 0.10
+                )
+        for worker in self.workers.values():
+            if worker.alive and worker.cash > 1000.0:
+                self.bank.deposit(worker, (worker.cash - 1000.0) * 0.02)
+        self.bank.pay_deposit_interest(
+            {**self.workers, **self.capitalists}
+        )
 
     def _pay_wages(self) -> None:
         for enterprise in self.active_enterprises():
@@ -464,6 +664,245 @@ class Engine:
                 worker.cash += paid
                 enterprise.month_wages += paid
 
+    # ------------------------------------------------------------------
+    # 政府 / 央行（历史阶段模块）
+    # ------------------------------------------------------------------
+    def _job_guarantee(self) -> None:
+        """MMT 的最后雇主：把剩余失业者吸收到公共工程。"""
+        gov = self.government
+        if gov is None or not gov.job_guarantee:
+            return
+        if gov.jg_max_workers > 0 and len(gov.jg_workers) >= gov.jg_max_workers:
+            return
+        unemployed = [
+            worker
+            for worker in self.workers.values()
+            if worker.alive and not worker.employed and not worker.is_owner_operator
+        ]
+        unemployed.sort(key=lambda worker: (worker.cash, worker.id))
+        for worker in unemployed:
+            if gov.jg_max_workers > 0 and len(gov.jg_workers) >= gov.jg_max_workers:
+                break
+            worker.employer_id = "GOV"
+            worker.wage = gov.jg_wage
+            worker.hours = 16
+            worker.industry = Industry.CONSTRUCTION
+            worker.ui_months = 0
+            gov.jg_workers.append(worker.id)
+
+    def _pay_government_wages(self) -> None:
+        gov = self.government
+        if gov is None or not gov.jg_workers:
+            return
+        alive = []
+        bill = 0.0
+        for worker_id in gov.jg_workers:
+            worker = self.workers.get(worker_id)
+            if worker is None or not worker.alive:
+                continue
+            alive.append(worker_id)
+            bill += worker.wage * worker.effective_labor
+        gov.jg_workers = alive
+        if bill <= 1e-9:
+            return
+        self._government_finance(max(0.0, bill - gov.cash), "wages")
+        factor = min(1.0, gov.cash / bill) if bill > 0 else 0.0
+        for worker_id in gov.jg_workers:
+            worker = self.workers[worker_id]
+            paid = worker.wage * worker.effective_labor * factor
+            gov.cash -= paid
+            worker.cash += paid
+        gov.spending += bill * factor
+
+    def _produce_government(self) -> None:
+        """公共工程产出：就业保障工人建造公共住房。"""
+        gov = self.government
+        if gov is None or not gov.jg_workers:
+            return
+        labor = sum(
+            self.workers[worker_id].effective_labor
+            for worker_id in gov.jg_workers
+            if worker_id in self.workers and self.workers[worker_id].alive
+        )
+        output = 0.4 * labor
+        gov.inventory[Good.BUILDING] += output
+        gov.public_capital += output
+
+    def _government_finance(self, amount: float, purpose: str) -> float:
+        """为政府支出融资。
+
+        MMT：央行购买国债/创造货币；金本位与 Keynesian：向资本家和银行
+        发行债券，货币守恒。若融不到足够资金，则让支出按比例缩减。
+        """
+        gov = self.government
+        if gov is None or amount <= 1e-9:
+            return 0.0
+        need = max(0.0, amount - gov.cash)
+        if need <= 1e-9:
+            return 0.0
+        if gov.fiat_money:
+            gov.cash += need
+            gov.central_bank_money += need
+            gov.debt += need
+            gov.bond_holders["CENTRAL_BANK"] = (
+                gov.bond_holders.get("CENTRAL_BANK", 0.0) + need
+            )
+            return need
+        buyers = [
+            (capitalist.id, capitalist.cash)
+            for capitalist in self.capitalists.values()
+            if capitalist.cash > 0
+        ]
+        buyers.append(("BANK", self.bank.cash))
+        buyers.sort(key=lambda item: item[1], reverse=True)
+        raised = 0.0
+        for buyer_id, cash in buyers:
+            if raised >= need:
+                break
+            take = min(need - raised, cash * 0.5)
+            if take <= 1e-9:
+                continue
+            if buyer_id == "BANK":
+                self.bank.cash -= take
+            else:
+                self.capitalists[buyer_id].cash -= take
+            gov.cash += take
+            gov.debt += take
+            gov.bond_holders[buyer_id] = (
+                gov.bond_holders.get(buyer_id, 0.0) + take
+            )
+            raised += take
+        return raised
+
+    def _submit_food_reserve_orders(self) -> None:
+        """粮食平准库存：高价释放，低价收储。"""
+        reserve = self.food_reserve
+        price = self.market.reference_prices[Good.FOOD]
+        initial = INITIAL_PRICES[Good.FOOD]
+        alive = sum(1 for worker in self.workers.values() if worker.alive)
+        monthly_need = max(1.0, alive * FOOD_PER_WORKER)
+        if price > 1.15 * initial and reserve.food > 1e-9:
+            quantity = min(reserve.food, 0.50 * monthly_need)
+            if quantity > 1e-9:
+                self.market.submit_sell(
+                    reserve, Good.FOOD, quantity, price * 0.95
+                )
+        elif price < 0.85 * initial and reserve.cash > 1e-9:
+            quantity = min(
+                0.10 * monthly_need, reserve.cash / max(price, 1e-9)
+            )
+            if quantity > 1e-9:
+                self.market.submit_buy(
+                    reserve, Good.FOOD, quantity, price * 1.05
+                )
+
+    def _submit_government_orders(self) -> None:
+        gov = self.government
+        if gov is None or not gov.active:
+            return
+        gdp = self.stats[-1]["gdp"] if self.stats else 0.0
+        budget = gov.public_investment_rate * gdp
+        if gov.public_investment_countercyclical > 0 and self.stats:
+            unemployment = self.stats[-1]["unemployment_rate"]
+            budget += (
+                gov.public_investment_countercyclical
+                * max(0.0, 0.07 - unemployment)
+                * gdp
+            )
+        # 财政现金不能无限闲置：超过 5000 的部分优先用于公共投资。
+        if gov.cash > 5000.0 and gdp > 0:
+            budget += min(gov.cash - 5000.0, 0.05 * gdp)
+        gov.public_investment_budget = max(0.0, budget)
+        if budget <= 1e-9:
+            return
+        self._government_finance(max(0.0, budget - gov.cash), "public_investment")
+        spend = min(budget, gov.cash)
+        if spend <= 1e-9:
+            return
+        prices = self.market.reference_prices
+        for good, weight in ((Good.BUILDING, 0.6), (Good.MACHINERY, 0.4)):
+            target = spend * weight
+            price = prices.get(good, 1.0)
+            quantity = target / max(price, 1e-9)
+            if quantity > 1e-9:
+                self.market.submit_buy(gov, good, quantity, price * 1.05)
+
+    def _government_settlement(self) -> None:
+        gov = self.government
+        if gov is None or not gov.active:
+            return
+        # 工资税
+        for worker in self.workers.values():
+            if not worker.alive or not worker.employed:
+                continue
+            income = worker.wage * worker.effective_labor
+            if income <= 0:
+                continue
+            tax = min(worker.cash, income * gov.tax_rate_wage)
+            worker.cash -= tax
+            gov.cash += tax
+            gov.tax_revenue += tax
+        # 利润税
+        for enterprise in self.active_enterprises():
+            if enterprise.last_profit <= 0:
+                continue
+            tax = min(
+                enterprise.cash, enterprise.last_profit * gov.tax_rate_profit
+            )
+            enterprise.cash -= tax
+            gov.cash += tax
+            gov.tax_revenue += tax
+        # 失业救济
+        avg_wage = self.average_wage()
+        for worker in self.workers.values():
+            if not worker.alive:
+                continue
+            if worker.employed:
+                worker.ui_months = 0
+                continue
+            if worker.is_owner_operator:
+                continue
+            if gov.ui_duration > 0 and worker.ui_months >= gov.ui_duration:
+                continue
+            benefit = avg_wage * gov.ui_replacement
+            if benefit <= 0:
+                continue
+            self._government_finance(max(0.0, benefit - gov.cash), "ui")
+            paid = min(benefit, gov.cash)
+            if paid > 0:
+                gov.cash -= paid
+                worker.cash += paid
+                gov.transfers += paid
+            worker.ui_months += 1
+        # 国债利息
+        if gov.debt > 0 and gov.bond_holders:
+            interest = gov.debt * self.bank.interest_rate
+            self._government_finance(
+                max(0.0, interest - gov.cash), "interest"
+            )
+            paid = min(interest, gov.cash)
+            if paid > 0:
+                gov.cash -= paid
+                gov.interest_paid += paid
+                total = sum(gov.bond_holders.values()) or 1.0
+                for holder_id, amount in list(gov.bond_holders.items()):
+                    share = amount / total
+                    if holder_id == "BANK" or holder_id == "CENTRAL_BANK":
+                        self.bank.cash += paid * share
+                    else:
+                        holder = self.capitalists.get(holder_id)
+                        if holder is not None:
+                            holder.cash += paid * share
+                        else:
+                            self.bank.cash += paid * share
+        gov.spending += self.market.government_spending
+        gov.deficit = (
+            gov.spending
+            + gov.transfers
+            + gov.interest_paid
+            - gov.tax_revenue
+        )
+
     def _produce_all(self) -> None:
         for enterprise in self.active_enterprises():
             if enterprise.industry == Industry.AGRICULTURE:
@@ -478,6 +917,39 @@ class Engine:
     def _investment_decisions(self) -> None:
         started = 0
 
+        # 0）死掉的行业：用一次手工 t0 重启（无资本品、小规模）。
+        for industry, manual_key in MANUAL_EQUIPMENT.items():
+            if not self.active_enterprises(industry):
+                self._bootstrap_manual_entry(industry, manual_key)
+
+        # 0.5）替换投资：按 δK 的聚合流量，每 12 个月补充一台主力设备。
+        # 不能等设备 age=120 才替换，否则资本品部门在前期没有底仓需求。
+        for enterprise in self.active_enterprises():
+            if started >= MAX_PROJECTS_PER_TICK:
+                break
+            if not enterprise.equipment:
+                continue
+            if enterprise.industry == Industry.AGRICULTURE and enterprise.is_household:
+                continue
+            out_good = SECTOR_PARAMS[enterprise.industry].output
+            if (
+                enterprise.plan_ratio < 0.2
+                and enterprise.inv(out_good)
+                > 6.0 * max(enterprise.demand_forecast, 1e-9)
+            ):
+                continue
+            if self.tick - enterprise.last_invest_tick < 12:
+                continue
+            key = max(
+                enterprise.equipment,
+                key=lambda k: (
+                    enterprise.equipment[k],
+                    EQUIPMENT[k].capacity,
+                ),
+            )
+            if self._start_project(enterprise, key):
+                started += 1
+
         # 1）现有资本主义农场。预留两个名额，避免农业转型
         # 被煤/铁项目挤掉。
         farms = [
@@ -486,9 +958,21 @@ class Engine:
             if not e.is_household
         ]
         farms.sort(key=lambda e: e.id)
+        # 农业保留 priority，但给活跃农业项目设硬上限；
+        # 否则 18 个农场项目会占满全部投资名额，把非农投资锁死。
+        active_agri_projects = sum(
+            1
+            for project in self.projects.values()
+            if project.active and project.industry == Industry.AGRICULTURE
+        )
+        agri_cap = max(1, min(3, MAX_ACTIVE_PROJECTS // 3))
         farms_started = 0
         for enterprise in farms:
-            if started >= MAX_PROJECTS_PER_TICK or farms_started >= 2:
+            if (
+                started >= MAX_PROJECTS_PER_TICK
+                or farms_started >= 2
+                or active_agri_projects >= agri_cap
+            ):
                 break
             choice = should_invest(self, enterprise)
             if choice is None:
@@ -497,6 +981,7 @@ class Engine:
             if self._start_project(enterprise, key, priority=True):
                 started += 1
                 farms_started += 1
+                active_agri_projects += 1
 
         # 2）一个新进入者。化肥行业为空时优先进入化肥：
         # 没有化肥厂，农场就无法采用这种让农业
@@ -508,7 +993,27 @@ class Engine:
             params = SECTOR_PARAMS[industry]
             if len(self.active_enterprises(industry)) >= params.max_firms:
                 continue
-            choice = best_equipment_choice(self, industry, budget=100_000.0)
+            if (
+                industry == Industry.FERTILIZER_FACTORY
+                and not self.active_enterprises(industry)
+            ):
+                # 化肥是农业的互补投入：没有化肥厂时，用农场的潜在需求
+                # 而不是“上月化肥销量=0”来评估进入，避免鸡生蛋死锁。
+                potential_demand = sum(
+                    farm.land * FERTILIZER_PER_MU
+                    for farm in self.active_enterprises(Industry.AGRICULTURE)
+                    if farm.modernization_capable
+                )
+                choice = best_equipment_choice(
+                    self,
+                    industry,
+                    budget=100_000.0,
+                    demand_override=max(potential_demand, 1.0),
+                )
+            else:
+                choice = best_equipment_choice(
+                    self, industry, budget=100_000.0
+                )
             if choice is None:
                 continue
             key, roi = choice
@@ -588,13 +1093,86 @@ class Engine:
             enterprise.ask_prices[params.output] = ask
             self.market.submit_sell(enterprise, params.output, quantity, ask)
 
+    def _submit_les_worker_orders(
+        self, worker: Worker, prices: Dict[Good, float]
+    ) -> None:
+        """Stone-Geary LES：生存底线 + 收入/价格弹性。
+
+        budget 低于 3 倍生存成本时全部花掉；高于时保留 2 个月生存储蓄。
+        """
+        goods = (Good.FOOD, Good.CLOTH, Good.BUILDING)
+        gamma = {Good.FOOD: 0.10, Good.CLOTH: 0.50, Good.BUILDING: 0.10}
+        beta = {Good.FOOD: 0.30, Good.CLOTH: 0.20, Good.BUILDING: 0.20}
+        price = {good: max(prices.get(good, 1.0), 1e-9) for good in goods}
+        subsistence = sum(price[good] * gamma[good] for good in goods)
+        if worker.cash <= 3.0 * subsistence:
+            budget = worker.cash
+        else:
+            budget = worker.cash - 2.0 * subsistence
+        if budget <= subsistence:
+            # 预算不足时食品优先：先保证 0.1 吨口粮，再分配衣物/住房。
+            food_quantity = min(
+                FOOD_PER_WORKER, budget / max(price[Good.FOOD], 1e-9)
+            )
+            remaining = max(
+                0.0, budget - food_quantity * price[Good.FOOD]
+            )
+            weight = gamma[Good.CLOTH] + gamma[Good.BUILDING]
+            quantities = {
+                Good.FOOD: food_quantity,
+                Good.CLOTH: (
+                    remaining * gamma[Good.CLOTH] / weight
+                    / max(price[Good.CLOTH], 1e-9)
+                    if weight > 0 else 0.0
+                ),
+                Good.BUILDING: (
+                    remaining * gamma[Good.BUILDING] / weight
+                    / max(price[Good.BUILDING], 1e-9)
+                    if weight > 0 else 0.0
+                ),
+            }
+        else:
+            extra = budget - subsistence
+            quantities = {
+                good: gamma[good] + beta[good] * extra / price[good]
+                for good in goods
+            }
+        stock = {
+            Good.FOOD: worker.food,
+            Good.CLOTH: worker.cloth,
+            Good.BUILDING: worker.housing,
+        }
+        cash_left = worker.cash
+        for good in goods:
+            need = max(0.0, quantities[good] - stock[good])
+            if need <= 1e-9:
+                continue
+            bid_multiplier = (
+                1.08 if good == Good.FOOD and worker.food < 0.05 else 1.04
+            )
+            bid = price[good] * bid_multiplier
+            quantity = min(need, cash_left / max(bid, 1e-9))
+            if quantity <= 1e-9:
+                continue
+            self.market.submit_buy(worker, good, quantity, bid)
+            cash_left -= quantity * bid
+
     def _submit_household_orders(self) -> None:
         prices = self.market.reference_prices
         for worker in self.workers.values():
             if not worker.alive:
                 continue
+            if self.demand_regime == "les":
+                self._submit_les_worker_orders(worker, prices)
+                continue
             comfort = worker.living_standard in ("comfort", "leisure")
-            mult = COMFORT_MULTIPLIER if comfort else 1.0
+            # 有积蓄且已有基础口粮时才尝试升级到 1.5 倍篮子；
+            # 否则基础温饱工人会被误判为小康，瞬间把食品需求推高 50%。
+            aspire_comfort = (
+                worker.cash >= COMFORT_SAVINGS
+                and worker.food >= FOOD_PER_WORKER
+            )
+            mult = COMFORT_MULTIPLIER if (comfort or aspire_comfort) else 1.0
             cash_left = max(0.0, worker.cash)
 
             food_gap = max(0.0, FOOD_PER_WORKER * mult - worker.food)
@@ -666,6 +1244,20 @@ class Engine:
                 continue
             workers = self.enterprise_workers(enterprise)
             wage_bill = sum(w.wage * w.effective_labor for w in workers)
+            # 营运资本：企业现金不足时，所有者先注入一部分。
+            # 金本位下这是权益注资，不创造货币。
+            required_cash = wage_bill * 2.0 + sum(
+                qty * prices.get(good, 0.0) * 1.06 for good, qty in needs.items()
+            ) * 0.5
+            if enterprise.cash < required_cash:
+                owner = self.capitalists.get(enterprise.owner_id)
+                if owner is not None and owner.cash > 0:
+                    injection = min(
+                        required_cash - enterprise.cash,
+                        owner.cash * 0.5,
+                    )
+                    owner.cash -= injection
+                    enterprise.cash += injection
             available = max(0.0, enterprise.cash - wage_bill * 2.0)
             if available <= 1e-9:
                 continue
@@ -743,14 +1335,31 @@ class Engine:
     def _complete_project(self, project: InvestmentProject) -> None:
         enterprise = self.enterprises.get(project.enterprise_id)
         if enterprise and enterprise.active:
-            enterprise.add_equipment(project.equipment_key, project.quantity)
+            if (
+                project.industry == Industry.FERTILIZER_FACTORY
+                and enterprise.total_equipment() >= 2
+            ):
+                # 兜底：任何路径都不能把化肥厂推过 2 台反应炉。
+                self.asset_pool.equipment[project.equipment_key] = (
+                    self.asset_pool.equipment.get(project.equipment_key, 0)
+                    + project.quantity
+                )
+            else:
+                enterprise.add_equipment(project.equipment_key, project.quantity)
             enterprise.active = True
             enterprise.cash += project.cash
-            project.cash = 0.0
+            # 项目剩余库存必须退回企业；否则资本品会凭空消失。
+            for good, qty in project.inventory.items():
+                if qty > 0:
+                    enterprise.inventory[good] = enterprise.inv(good) + qty
         else:
-            # 孤儿项目：退款给银行，避免货币被销毁。
+            # 孤儿项目：退款给银行，货物进资产池，避免资产被销毁。
             self.bank.cash += project.cash
-            project.cash = 0.0
+            for good, qty in project.inventory.items():
+                if qty > 0:
+                    self.asset_pool.inventory[good] += qty
+        project.inventory = {g: 0.0 for g in Good}
+        project.cash = 0.0
         project.active = False
 
     def _cancel_project(self, project: InvestmentProject) -> None:
@@ -761,6 +1370,10 @@ class Engine:
                 enterprise.inventory[good] = enterprise.inv(good) + qty
         else:
             self.bank.cash += project.cash
+            for good, qty in project.inventory.items():
+                if qty > 0:
+                    self.asset_pool.inventory[good] += qty
+        project.inventory = {g: 0.0 for g in Good}
         project.cash = 0.0
         project.active = False
 
@@ -777,12 +1390,16 @@ class Engine:
                 self.bank.repay(enterprise, (enterprise.cash - wage_bill * 3.0) * 0.30)
 
             enterprise.last_revenue = enterprise.month_revenue
-            enterprise.last_costs = enterprise.month_input_cost
+            # 利润表按“实际消耗投入 × 当前参考价”计中间成本。
+            # month_input_cost 是采购现金流，采购多不等于亏得多。
+            enterprise.last_costs = sum(
+                qty * prices.get(good, 0.0)
+                for good, qty in enterprise.last_input_used.items()
+            )
             enterprise.last_wages = enterprise.month_wages
             enterprise.last_interest = enterprise.month_interest
-            depreciation = (
-                capital_value(enterprise, prices, self.land.price) / DEPRECIATION_MONTHS
-            )
+            # 土地是资产，不计折旧；只对设备计提。
+            depreciation = equipment_value(enterprise, prices) / DEPRECIATION_MONTHS
             enterprise.last_profit = (
                 enterprise.last_revenue
                 - enterprise.last_costs
@@ -829,9 +1446,94 @@ class Engine:
                 worker.employer_id = None
                 worker.wage = 0.0
         enterprise.workers.clear()
+        # 现金归银行；库存/设备/土地进资产池，不能凭空消失。
         if enterprise.cash > 0:
             self.bank.cash += enterprise.cash
             enterprise.cash = 0.0
+        for good, qty in enterprise.inventory.items():
+            if qty > 0:
+                self.asset_pool.inventory[good] += qty
+        for key, count in enterprise.equipment.items():
+            if count > 0:
+                self.asset_pool.equipment[key] = (
+                    self.asset_pool.equipment.get(key, 0) + count
+                )
+        if enterprise.land > 0:
+            self.land.estate_land += enterprise.land
+        enterprise.inventory = {g: 0.0 for g in Good}
+        enterprise.equipment = {}
+        enterprise.land = 0.0
+        # 债务注销：银行确认坏账，企业不再挂债。
+        loan = self.bank.loans.pop(enterprise.id, 0.0)
+        self.bank.write_offs += loan
+        enterprise.debt = 0.0
+
+    def _cleanup_dormant(self) -> None:
+        """清理无设备、无工人、无库存的壳企业，释放 max_firms 槽位。"""
+        for enterprise in self.enterprises.values():
+            if not enterprise.active:
+                continue
+            has_assets = (
+                bool(enterprise.equipment)
+                or bool(enterprise.workers)
+                or enterprise.land > 0
+                or any(qty > 1e-9 for qty in enterprise.inventory.values())
+            )
+            if has_assets:
+                enterprise.dormant_months = 0
+                continue
+            enterprise.dormant_months += 1
+            if enterprise.dormant_months < 6:
+                continue
+            if enterprise.cash > 0:
+                owner = self.capitalists.get(enterprise.owner_id)
+                if owner is not None:
+                    owner.cash += enterprise.cash
+                else:
+                    self.bank.cash += enterprise.cash
+                enterprise.cash = 0.0
+            enterprise.active = False
+
+    def _settle_estate(self, worker: Worker) -> None:
+        """死亡自耕农的遗产清算：土地回市场，家庭农场停业。
+
+        死亡只把现金转银行是不够的；如果不清理 land.owners 和家庭农场，
+        死者会继续“持有”土地并占据雇工/信贷资源。
+        """
+        ent_id = self.land.enterprise_by_owner.pop(worker.id, None)
+        if ent_id:
+            enterprise = self.enterprises.get(ent_id)
+            if enterprise and enterprise.active:
+                for worker_id in list(enterprise.workers):
+                    other = self.workers.get(worker_id)
+                    if other and other.alive:
+                        other.employer_id = None
+                        other.wage = 0.0
+                enterprise.workers.clear()
+                if enterprise.cash > 0:
+                    self.bank.cash += enterprise.cash
+                    enterprise.cash = 0.0
+                for good, qty in enterprise.inventory.items():
+                    if qty > 0:
+                        self.asset_pool.inventory[good] += qty
+                for key, count in enterprise.equipment.items():
+                    if count > 0:
+                        self.asset_pool.equipment[key] = (
+                            self.asset_pool.equipment.get(key, 0) + count
+                        )
+                if enterprise.land > 0:
+                    self.land.estate_land += enterprise.land
+                enterprise.inventory = {g: 0.0 for g in Good}
+                enterprise.equipment = {}
+                enterprise.land = 0.0
+                enterprise.active = False
+        mu = self.land.owners.pop(worker.id, 0.0)
+        if mu > 0:
+            self.land.estate_land += mu
+        # 死亡储户的存款留在银行；从存款台账移除，避免利息记到死者。
+        self.bank.deposits.pop(worker.id, 0.0)
+        worker.land_owned = 0.0
+        worker.is_owner_operator = False
 
     # ------------------------------------------------------------------
     # 消费 / 人口
@@ -868,12 +1570,16 @@ class Engine:
                     self.dead_this_month += 1
                     self.bank.cash += max(0.0, worker.cash)
                     worker.cash = 0.0
+                    self._settle_estate(worker)
                     employer = self.enterprises.get(worker.employer_id or "")
                     if employer and worker.id in employer.workers:
                         employer.workers.remove(worker.id)
                     worker.employer_id = None
                     continue
 
+            comfort_food = FOOD_PER_WORKER * COMFORT_MULTIPLIER
+            comfort_cloth = CLOTH_PER_WORKER * COMFORT_MULTIPLIER
+            comfort_housing = HOUSING_PER_WORKER * COMFORT_MULTIPLIER
             if worker.consumed_food + 1e-9 < FOOD_PER_WORKER:
                 worker.living_standard = "survival"
             elif (
@@ -881,10 +1587,19 @@ class Engine:
                 or worker.consumed_housing + 1e-9 < HOUSING_PER_WORKER
             ):
                 worker.living_standard = "subsistence"
-            elif worker.hours <= 8 and worker.cash >= 120.0:
-                worker.living_standard = "leisure"
+            elif (
+                worker.consumed_food + 1e-9 >= comfort_food
+                and worker.consumed_cloth + 1e-9 >= comfort_cloth
+                and worker.consumed_housing + 1e-9 >= comfort_housing
+                and worker.cash >= COMFORT_SAVINGS
+            ):
+                # 小康/悠闲按 PRD：三项达到温饱线 1.5 倍且有积蓄。
+                if worker.hours <= 8 and worker.cash >= LEISURE_SAVINGS:
+                    worker.living_standard = "leisure"
+                else:
+                    worker.living_standard = "comfort"
             else:
-                worker.living_standard = "comfort"
+                worker.living_standard = "subsistence"
 
         for capitalist in self.capitalists.values():
             capitalist.consumed_food = min(capitalist.food, CAPITALIST_FOOD)
@@ -952,7 +1667,12 @@ class Engine:
         )
 
         money_total = self.total_money()
-        if self.money_initial > 0 and abs(money_total - self.money_initial) > 0.01:
+        fiat = self.government is not None and self.government.fiat_money
+        if (
+            not fiat
+            and self.money_initial > 0
+            and abs(money_total - self.money_initial) > 0.01
+        ):
             self._warnings.append(
                 f"货币漂移：{money_total:.2f} != {self.money_initial:.2f}"
             )
@@ -969,17 +1689,69 @@ class Engine:
                 self._zero_output_streak[good.value] += 1
             else:
                 self._zero_output_streak[good.value] = 0
-            if self._zero_output_streak[good.value] == 3:
-                self._warnings.append(f"{GOOD_LABELS[good]} 连续 3 个月产量为 0")
+            streak = self._zero_output_streak[good.value]
+            # 连续第 3 个月提醒一次，之后每 12 个月再提醒；
+            # 不能只在恰好第 3 个月提醒，否则长期停摆会被静默忽略。
+            if streak == 3 or (streak > 3 and streak % 12 == 0):
+                self._warnings.append(
+                    f"{GOOD_LABELS[good]} 连续 {streak} 个月产量为 0"
+                )
 
-        gdp = self.market.consumption_spending + self.market.investment_spending
+        projects_by_industry = {ind.value: 0 for ind in Industry}
+        for project in self.projects.values():
+            if project.active:
+                projects_by_industry[project.industry.value] += 1
+        gdp = (
+            self.market.consumption_spending
+            + self.market.investment_spending
+            + self.market.government_spending
+        )
+        government = self.government
         stat = {
             "tick": self.tick,
             "alive": len(alive_workers),
             "dead_this_month": self.dead_this_month,
+            "unemployed": unemployed,
+            "active_enterprises": len(self.active_enterprises()),
             "money_total": money_total,
             "bank_cash": self.bank.cash,
             "bank_loans": sum(self.bank.loans.values()),
+            "bank_write_offs": self.bank.write_offs,
+            "bank_deposits": sum(self.bank.deposits.values()),
+            "government_cash": government.cash if government else 0.0,
+            "government_debt": government.debt if government else 0.0,
+            "government_tax_revenue": (
+                government.tax_revenue if government else 0.0
+            ),
+            "government_transfers": government.transfers if government else 0.0,
+            "government_spending": government.spending if government else 0.0,
+            "government_market_spending": self.market.government_spending,
+            "government_deficit": government.deficit if government else 0.0,
+            "government_jg_workers": (
+                len(government.jg_workers) if government else 0
+            ),
+            "central_bank_money": (
+                government.central_bank_money if government else 0.0
+            ),
+            "policy_regime": government.regime.value if government else "classical",
+            "money_regime": government.money_regime.value if government else "gold",
+            "price_regime": self.price_regime,
+            "average_markup": (
+                sum(e.markup for e in self.active_enterprises())
+                / max(1, len(self.active_enterprises()))
+            ),
+            "estate_land": self.land.estate_land,
+            "food_reserve": self.food_reserve.food,
+            "food_reserve_cash": self.food_reserve.cash,
+            "asset_pool_inventory_value": sum(
+                qty * prices.get(good, 0.0)
+                for good, qty in self.asset_pool.inventory.items()
+            ),
+            "asset_pool_equipment_units": sum(self.asset_pool.equipment.values()),
+            "zero_output_streak": {
+                good.value: self._zero_output_streak[good.value] for good in Good
+            },
+            "active_projects": projects_by_industry,
             "gdp": gdp,
             "consumption": self.market.consumption_spending,
             "investment": self.market.investment_spending,

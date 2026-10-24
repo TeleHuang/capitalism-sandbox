@@ -5,12 +5,29 @@ import json
 from pathlib import Path
 
 from .engine import Engine
-from .scenarios import build_scenario_1
+from .scenarios import (
+    CLASSICAL_LAISSEZ_FAIRE,
+    KEYNESIAN_WELFARE,
+    MMT_SOVEREIGN,
+    ScenarioConfig,
+    build_scenario_1,
+)
+
+REGIMES = {
+    "classical": CLASSICAL_LAISSEZ_FAIRE,
+    "keynesian": KEYNESIAN_WELFARE,
+    "mmt": MMT_SOVEREIGN,
+}
 
 
-def run(months: int = 240, seed: int = 1, every: int = 12) -> Engine:
+def run(
+    months: int = 240,
+    seed: int = 1,
+    every: int = 12,
+    scenario: ScenarioConfig = CLASSICAL_LAISSEZ_FAIRE,
+) -> Engine:
     engine = Engine(seed=seed)
-    build_scenario_1(engine)
+    build_scenario_1(engine, config=scenario)
     for month in range(1, months + 1):
         stat = engine.step()
         if every > 0 and (month % every == 0 or month == 1):
@@ -44,9 +61,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=1, help="确定性随机种子")
     parser.add_argument("--every", type=int, default=12, help="每 N 个月打印一行")
     parser.add_argument("--json", type=Path, default=None, help="把完整统计写入 JSON")
+    parser.add_argument(
+        "--regime",
+        choices=sorted(REGIMES),
+        default="classical",
+        help="政策制度：classical（自由放任）/ keynesian（福利国家）/ mmt（主权货币+就业保障）",
+    )
     args = parser.parse_args(argv)
 
-    engine = run(args.months, args.seed, args.every)
+    engine = run(args.months, args.seed, args.every, REGIMES[args.regime])
     final = engine.stats[-1]
     print()
     print("最终状态")
@@ -74,6 +97,22 @@ def main(argv: list[str] | None = None) -> int:
         f"自耕农土地：{final['smallholder_land']:.0f} 亩"
     )
     print(f"  货币总量：{final['money_total']:.0f}（初始 {engine.money_initial:.0f}）")
+    print(f"  政策制度：{args.regime}")
+    if final.get("policy_regime") != "classical":
+        print(
+            f"  政府现金/债务：{final['government_cash']:.0f} / "
+            f"{final['government_debt']:.0f}"
+        )
+        print(
+            f"  税收/转移/支出/赤字：{final['government_tax_revenue']:.0f} / "
+            f"{final['government_transfers']:.0f} / "
+            f"{final['government_spending']:.0f} / "
+            f"{final['government_deficit']:.0f}"
+        )
+        print(
+            f"  就业保障人数：{final['government_jg_workers']}  "
+            f"央行货币：{final['central_bank_money']:.0f}"
+        )
     if final["warnings"]:
         print("  警告：")
         for warning in final["warnings"]:
