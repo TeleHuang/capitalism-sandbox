@@ -38,3 +38,6 @@ Thumbs.db
 .env
 settings_DS.json
 llm_cache.json
+
+# 自动交接快照（本地日志）
+/docs/COMPACT_LOG.md
