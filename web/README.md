@@ -1,9 +1,9 @@
-# HTML 发行版（规划中）
+# HTML 发行版（原型阶段）
 
 最终发行版只包含一个 HTML 文件：用户下载后在电脑上双击打开，或在手机上用指定浏览器打开，
 即可游玩，不要求安装 Python，也不依赖服务器或外部资源。
 
-当前状态：**视觉原型已存在**（hex-map-preview.html），但尚未接入仿真引擎。它使用内联 SVG/JS，可直接双击打开。技术路线与理由见 [[docs/decisions/0003-html-release.md]]。
+当前状态：**UI 视觉原型已存在**（ui-preview.html，另有较早的 hex-map-preview.html），但尚未接入仿真引擎。它使用内联 SVG/JS，可直接双击打开。技术路线与理由见 [[docs/decisions/0003-html-release.md]]。
 
 计划结构：
 
@@ -14,7 +14,8 @@ web/
 │  ├─ ui.ts          # 界面、图表、交互
 │  └─ styles.css
 ├─ build.mjs         # 把 TS/CSS/默认场景内联进单个 HTML
-├─ hex-map-preview.html  # 当前六边形地图视觉原型
+├─ ui-preview.html       # 完整 UI 原型（开始/总览/详情/地图）
+├─ hex-map-preview.html  # 较早的纯地图原型
 ├─ index.html        # 最终发行文件（构建产物）
 └─ golden/           # Python 导出的固定随机种子黄金运行样例
 ```
@@ -27,3 +28,28 @@ web/
 4. 与 Python 参考实现共享逻辑定义，用 `golden/` 样例做交叉验证。
 
 在 HTML 版本落地前，经济规则以 `src/ecosim/` 和 `tests/` 为准。
+## 当前原型
+
+- ui-preview.html：完整 UI 原型（开始界面、总览、领域详情、六边形地图）；
+- hex-map-preview.html：较早的纯地图原型；
+- screenshots/：桌面、竖屏、开始界面与详情页截图。
+
+打开方式：直接双击 ui-preview.html，或用 ?view=overview 跳过开始界面、用 ?detail=agriculture 直接打开详情。
+
+## 截图
+
+### 桌面总览
+
+![桌面总览](screenshots/ui-desktop.png)
+
+### 竖屏总览
+
+![竖屏总览](screenshots/ui-portrait.png)
+
+### 开始界面
+
+![开始界面](screenshots/ui-start.png)
+
+### 农业详情
+
+![农业详情](screenshots/ui-detail-agriculture.png)

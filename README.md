@@ -5,7 +5,7 @@
 
 长期目标是用 LLM 扮演经理和董事；当前里程碑是先把规则驱动的经济内核做扎实。
 
-> 状态：**V0.3.1 — 2^N 设备表版，HTML 发行版尚未实现。**
+> 状态：**V0.3.2 — 2^N 设备表版，HTML 发行版尚未实现。**
 > 引擎可运行、固定随机种子可复现，并有回归测试。LLM 智能体、合同、期货订单和完整界面
 > 是刻意推迟的内容。
 
@@ -73,7 +73,7 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 
 ## 六边形地块视图
 
-最终 HTML 发行版将使用 7 个六边形地块：中心是城市（纺织厂/施工队），周围是机械、钢铁、农业、矿场、化肥、砖厂。农业地块有河流、森林和金色网格农田；矿场是山地；空地块是草地和稀疏树木。当前已有单文件视觉原型 web/hex-map-preview.html，尚未接入仿真；见 [[web/README.md]] 和 [[03_架构设计文档.md]]。
+最终 HTML 发行版将使用 7 个六边形地块：中心是城市（纺织厂/施工队），周围是机械、钢铁、农业、矿场、化肥、砖厂。农业地块有河流、森林和金色网格农田；矿场是山地；空地块是草地和稀疏树木。当前已有单文件 UI 原型 web/ui-preview.html，尚未接入仿真；见 [[web/README.md]] 和 [[03_架构设计文档.md]]。
 
 ## 尚未实现
 
@@ -110,7 +110,9 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 │  ├─ LLM_LOCAL_SETUP.md       # 本地 LLM 调试与安全
 │  └─ decisions/               # 架构决策记录
 └─ web/
-   ├─ hex-map-preview.html     # 六边形地图视觉原型
+   ├─ ui-preview.html          # 完整 UI 原型（开始/总览/详情/地图）
+   ├─ hex-map-preview.html     # 较早的纯地图原型
+   ├─ screenshots/             # UI 截图
    └─ README.md                # HTML 发行版规划
 ```
 
