@@ -5,6 +5,22 @@
 
 当前状态：**UI 视觉原型已存在**（ui-preview.html，另有较早的 hex-map-preview.html），但尚未接入仿真引擎。它使用内联 SVG/JS，可直接双击打开。技术路线与理由见 [[docs/decisions/0003-html-release.md]]。
 
+## V0.4 本地驾驶舱（当前推荐用于找 BUG）
+
+前后端分离：Python 标准库 HTTP 服务 + 原生 HTML/JS/SVG，数据来自真实
+`Engine.stats`，不把 240 月数据嵌进 HTML。
+
+```powershell
+python scripts/serve_dashboard.py --port 8765
+# 浏览器打开 http://127.0.0.1:8765
+```
+
+![V0.4 驾驶舱](screenshots/v04-cockpit-240.png)
+
+支持制度切换、月份时间轴、宏观/政府/商品/行业图表、利润分解、银行/政府预算/
+库存/价格带诊断、三制度对比。旧的 `ui-preview.html` 是 V0.3.2 硬编码原型，
+保留作视觉参考；最终单文件 HTML 发行版尚未同步 V0.4。
+
 计划结构：
 
 ```
