@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="EcoSim V0.4 本地经济驾驶舱：真实引擎统计、制度切换与逐月诊断。">
+<title>EcoSim V0.4 · 经济驾驶舱</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<a class="skip-link" href="#dashboard-main">跳到仪表盘内容</a>
+
+<div id="error-banner" role="alert" aria-live="assertive" hidden>
+  <div class="error-mark" aria-hidden="true">!</div>
+  <div class="error-copy">
+    <strong>页面脚本错误，部分内容可能未渲染</strong>
+    <span id="error-text"></span>
+  </div>
+  <button id="error-close" class="error-close" type="button" aria-label="关闭错误提示">关闭</button>
+</div>
+
+<noscript>
+  <div class="noscript">此仪表盘需要启用 JavaScript，并通过本地 API 运行仿真。启动 <code>python scripts/serve_dashboard.py</code> 后访问本页。</div>
+</noscript>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="eyebrow">ECOSIM / V0.4 / DIAGNOSTIC COCKPIT</div>
+      <h1>经济驾驶舱</h1>
+      <p class="lede">真实引擎输出 · 每个数字都来自 <code>engine.stats</code> 的逐月切片</p>
+      <div class="meta-strip">
+        <span id="source-line">正在连接本地引擎 API…</span>
+        <span class="sep" aria-hidden="true">/</span>
+        <span id="generated-line"></span>
+        <span class="sep" aria-hidden="true">/</span>
+        <span>本地运行 · 无外部资源</span>
+      </div>
+      <div id="runtime-badges" class="runtime-badges" aria-live="polite">
+        <span class="runtime-badge" data-state="loading"><span class="dot"></span><span>正在运行初始制度…</span></span>
+      </div>
+    </div>
+    <div class="status-cluster">
+      <div class="status-pill"><span class="status-dot" aria-hidden="true"></span><span>LOCAL ENGINE / API</span></div>
+      <div class="status-caption">Python 引擎 · 标准库 HTTP 服务</div>
+    </div>
+  </header>
+
+  <section class="control-deck" aria-label="时间轴与制度切换">
+    <div class="control-regimes">
+      <div class="control-label">制度切片</div>
+      <div id="regime-tabs" class="regime-tabs" role="tablist" aria-label="经济制度"></div>
+      <div id="regime-meta" class="regime-meta">正在等待引擎返回配置…</div>
+    </div>
+    <div class="control-clock">
+      <div class="control-label">当前月份</div>
+      <div class="month-readout">
+        <strong id="month-value">T—</strong>
+        <span id="month-total">/ — 月</span>
+      </div>
+      <div class="step-controls">
+        <button id="prev-month" class="step-btn" type="button">上一月</button>
+        <button id="next-month" class="step-btn" type="button">下一月</button>
+      </div>
+    </div>
+    <div class="timeline">
+      <input id="month-slider" type="range" min="1" max="240" value="240" step="1" aria-label="仿真月份" disabled>
+      <div id="timeline-scale" class="timeline-scale"></div>
+    </div>
+  </section>
+
+  <div id="load-banner" hidden>
+    <span class="spinner" aria-hidden="true"></span>
+    <span><strong id="load-title">正在运行仿真</strong> <span id="load-detail" class="load-detail"></span></span>
+    <button id="load-retry" class="load-retry" type="button" hidden>重试</button>
+  </div>
+
+  <main id="dashboard-main">
+    <div id="boot-placeholder" class="announce">
+      <span class="spinner" aria-hidden="true"></span>
+      <strong id="boot-title">正在启动本地经济引擎…</strong>
+      <p id="boot-detail">引擎正在运行 240 个月。首次运行需要等待，服务端会缓存结果；之后切换制度会直接读取缓存。</p>
+      <button id="boot-retry" class="retry-btn" type="button" hidden>重新请求</button>
+      <p class="api-hint">API：<code>/api/run?regime=classical&amp;months=240&amp;seed=1</code></p>
+    </div>
+
+    <div id="dashboard-content" class="hidden">
+      <section aria-labelledby="kpi-title">
+        <div class="section-heading">
+          <div><span class="kicker">READOUT</span><h2 id="kpi-title">关键指标</h2></div>
+          <p id="kpi-context" class="section-note"></p>
+        </div>
+        <div id="kpi-grid" class="kpi-grid"></div>
+      </section>
+
+      <section class="chart-layout" aria-label="宏观与政府趋势图">
+        <article class="panel macro-panel">
+          <header class="panel-head">
+            <div class="panel-title-wrap">
+              <h2>宏观轨迹</h2>
+              <p class="panel-sub">GDP / 投资 / 失业 / 利润率 · 当前月份之前的真实历史</p>
+            </div>
+            <span class="panel-note">纵轴固定<br>点击图表定位月份</span>
+          </header>
+          <div class="panel-body"><div id="macro-grid" class="macro-grid"></div></div>
+        </article>
+        <article class="panel gov-panel">
+          <header class="panel-head">
+            <div class="panel-title-wrap">
+              <h2>政府与货币</h2>
+              <p class="panel-sub">政府债务与央行货币 · 同一单位同一纵轴</p>
+            </div>
+            <span class="panel-note">单位：元<br>存量口径</span>
+          </header>
+          <div class="panel-body">
+            <div id="gov-legend" class="legend"></div>
+            <div class="chart-host" data-chart="multi" data-metrics="government_debt,central_bank_money" data-height="228"></div>
+            <div id="gov-facts" class="fact-list"></div>
+          </div>
+        </article>
+      </section>
+
+      <section aria-labelledby="market-title">
+        <div class="section-heading">
+          <div><span class="kicker">MARKET LAYERS</span><h2 id="market-title">价格与产量</h2></div>
+          <p class="section-note">小多图按 stats keys 动态生成 · 点击任意小图定位月份</p>
+        </div>
+        <div class="dual-grid">
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>各商品价格</h2>
+                <p class="panel-sub">每格一条价格轨迹，显示当前价格与价格带上下轨</p>
+              </div>
+              <span class="panel-note">真实参考价</span>
+            </header>
+            <div class="panel-body"><div id="price-grid" class="mini-grid"></div></div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>各行业产量</h2>
+                <p class="panel-sub">按产出商品展示，行业名从 stats 映射，不写死行业清单</p>
+              </div>
+              <span class="panel-note">月产量</span>
+            </header>
+            <div class="panel-body"><div id="production-grid" class="mini-grid"></div></div>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="diag-title">
+        <div class="section-heading">
+          <div><span class="kicker">DIAGNOSTICS</span><h2 id="diag-title">诊断表</h2></div>
+          <p class="section-note">利润分解、资产负债表、预算、库存与价格带 · 全部按当前月份同步</p>
+        </div>
+        <div id="diagnostics-grid" class="diag-grid"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="footer-grid">
+      <div>
+        数据：<span id="footer-engine">Engine + build_scenario_1</span> · 全部数值来自真实引擎运行，未使用示例数字。<br>
+        服务：<code>python scripts/serve_dashboard.py --port 8765</code>
+        · 接口：<code>/api/run</code> · <code>/api/compare</code>
+      </div>
+      <div id="footer-generated">本地 API · 单页前端</div>
+    </div>
+  </footer>
+</div>
+
+<div id="chart-tooltip" role="status" aria-live="polite" hidden></div>
+
+<script>
+/* 尽早安装错误处理器：即使 app.js 加载失败也能显示错误，而不是白屏。 */
+window.__dashboardReportError = function (message) {
+  try {
+    var banner = document.getElementById("error-banner");
+    var text = document.getElementById("error-text");
+    if (!banner || !text) return;
+    var value = String(message || "未知错误");
+    if (value.length > 700) value = value.slice(0, 700) + "…";
+    text.textContent = value;
+    banner.hidden = false;
+  } catch (_) {}
+};
+window.onerror = function (message, source, lineno, colno, error) {
+  var where = source ? " @ " + source + (lineno ? ":" + lineno : "") : "";
+  window.__dashboardReportError((error && error.stack) || (message + where));
+  return false;
+};
+window.addEventListener("unhandledrejection", function (event) {
+  var reason = event && event.reason;
+  window.__dashboardReportError("未处理的 Promise 拒绝：" + (reason && (reason.stack || reason.message) || String(reason)));
+});
+</script>
+<script src="/app.js" defer></script>
+</body>
+</html>
