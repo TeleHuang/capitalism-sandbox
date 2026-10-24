@@ -54,16 +54,19 @@
 
 ## 并行版本树（进行中）
 
-基线：`506d92e`（v0.4-integration）。每个 feature 一个 worktree/分支：
+基线：`v0.4.2` 主线；每个 feature 从当前 `v0.4-integration` HEAD 分支：
 
 | 分支 | worktree | 状态/目标 |
 |---|---|---|
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | **已合并** `d8cdae7`：前后端分离 UI（Python http.server + HTML/JS，localhost） |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停（减少 CPU/风扇） |
-| `feature/services` | `.claude/worktrees/services` | **已合并** `79d27de`：服务业/非正规自雇，古典失业 43%→9.3% |
-| `feature/l2` | `.claude/worktrees/l2` | 暂停（减少 CPU/风扇），worktree 保留 |
-| `feature/fertilizer` | `.claude/worktrees/fertilizer` | 暂停（减少 CPU/风扇），worktree 保留 |
-| `feature/validation` | `.claude/worktrees/validation` | **进行中**：冲击测试、不变量、验证报告 |
+| `feature/services` | `.claude/worktrees/services` | **已合并** `79d27de`：服务业/非正规自雇 |
+| `feature/l2` | `.claude/worktrees/l2` | 暂停（自由 markup/LES WIP） |
+| `feature/l2-soft` | `.claude/worktrees/l2-soft` | **已合并** `7c97df0`：参考价锚定软 markup |
+| `feature/fertilizer` | `.claude/worktrees/fertilizer` | **已合并** `61fae0e`：化肥周转资金/连续供应 |
+| `feature/validation` | `.claude/worktrees/validation` | **已合并** `1891485`：冲击/不变量测试 |
+| `feature/plan-skill` | `.claude/worktrees/plan-skill` | **已合并** `ed231e1`：计划/熟练度单位修复、利润率修正 |
+| `feature/demography` | `.claude/worktrees/demography` | **进行中**：V0.5 人口/代际/退休金/百年仿真 |
 
 集成规则：子代理在各自 worktree 提交；主代理审查 diff、跑测试、按
 services → validation → UI 的顺序 cherry-pick 到 `v0.4-integration`；
