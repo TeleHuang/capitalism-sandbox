@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capitalism-sandbox"
+version = "0.2.0"
+description = "An agent-based sandbox for a closed capitalist economy"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "TeleHuang" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+ui = ["fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+ecosim = "ecosim.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

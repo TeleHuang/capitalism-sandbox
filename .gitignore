@@ -1,0 +1,36 @@
+# Obsidian / Claudian runtime
+.obsidian/
+.claudian/
+.claude/
+.trash/
+
+# Old prototype (kept locally for reference, not in the refactored repo)
+/py_engine/
+/debug_engine.py
+/test_run.py
+/out.txt
+/out2.txt
+/stats_240.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Simulation outputs
+/artifacts/
+/runs/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
