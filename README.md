@@ -5,10 +5,11 @@
 
 长期目标是用 LLM 扮演经理和董事；当前里程碑是先把规则驱动的经济内核做扎实。
 
-> 状态：**V0.4 — 负反馈修复与历史阶段工作流；HTML 发行版尚未同步。**
-> 引擎可运行、固定随机种子可复现，并有回归测试。新增古典/Keynesian/MMT 三种
-> 政策制度、生产—库存闭环、需求约束投资、劳动市场修正与粮食平准库存。
-> LLM 智能体、合同、期货订单和完整界面仍是刻意推迟的内容。
+> 状态：**V0.4 — 负反馈修复、历史阶段与本地驾驶舱；单文件 HTML 发行版尚未同步。**
+> 引擎可运行、固定随机种子可复现，并有 50 个回归测试。新增古典/Keynesian/MMT
+> 三种政策制度、生产—库存闭环、需求约束投资、劳动市场修正、粮食平准库存、
+> 服务业/非正规自雇，以及前后端分离的本地驾驶舱。
+> LLM 智能体、合同、期货订单和最终单文件 HTML 仍是刻意推迟的内容。
 
 ## 快速开始
 
@@ -58,6 +59,18 @@ python -m ecosim --months 240 --seed 1 --regime mmt
 `src/ecosim/scenarios.py` 的 `ScenarioConfig`；设计说明见
 [[docs/decisions/0004-historical-regimes.md]]。
 
+## V0.4 本地驾驶舱
+
+前后端分离的调试/观察界面（Python 标准库 HTTP + 原生 HTML/JS/SVG，无 CDN）：
+
+```powershell
+python scripts/serve_dashboard.py --port 8765
+```
+
+浏览器打开 <http://127.0.0.1:8765>。支持制度切换、月份时间轴、宏观/政府/商品/
+行业图表、利润分解、银行/政府预算/库存/价格带诊断，以及三制度对比。
+数据来自真实 `Engine.stats`，不写死示例数字。
+
 ## 可选的 LLM 经理探针
 
 默认仿真不访问网络。若要在本地验证“长期规划”经理，可先设置环境变量（不要把 token 写进仓库）：
@@ -74,7 +87,8 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 ## V0.3 已实现
 
 - 240 个月度轮次；固定随机种子；货币总量守恒审计。
-- 9 个行业：农业、煤炭、铁矿、钢铁、砖、纺织、机械、施工、化肥。
+- 10 个行业：农业、煤炭、铁矿、钢铁、砖、纺织、机械、施工、化肥、服务业
+  （服务业是 V0.4 新增的劳动密集/非正规自雇部门）。
 - **2 的 N 次方设备表**：每个行业 8 个等级（1×~128×），产能翻倍、工人 +1；
   企业优先选择能负担的最小规模，再按需求升级。
 - 企业级生产：显式设备目录、劳动需求、投入系数和熟练度。
@@ -101,7 +115,7 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 
 - 完整 LLM 经理/董事智能体与管理层级；当前只有本地探针，未接入仿真。
 - 合同、期货/订单生产、跨月平滑采购。
-- HTML 发行版尚未同步 V0.4；当前入口是命令行。
+- 单文件 HTML 发行版尚未同步 V0.4；当前入口是命令行 + 本地驾驶舱。
 - L2 成本加成 + LES 需求仍是实验分支（`price_regime="markup"` /
   `demand_regime="les"`），默认仍是成本价格带 + 固定篮子。
 - 场景 0（铁器时代）和场景 2（晚期资本主义）的完整配置。
@@ -127,14 +141,15 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 ├─ 03_架构设计文档.md          # 由 Code Bot 维护，必须与代码一致
 ├─ 04_开发日志文档.md
 ├─ src/ecosim/                 # Python 参考实现
-├─ scripts/                    # 本地调试脚本（LLM 探针）
+├─ scripts/                    # LLM 探针、制度对比、验证、驾驶舱服务
 ├─ tests/                      # 确定性回归测试
 ├─ docs/
 │  ├─ REQUIREMENTS_REVIEW.md   # 需求冲突 / 待选项
 │  ├─ LLM_LOCAL_SETUP.md       # 本地 LLM 调试与安全
 │  └─ decisions/               # 架构决策记录
 └─ web/
-   ├─ ui-preview.html          # 完整 UI 原型（开始/总览/详情/地图）
+   ├─ v04/                     # V0.4 前后端分离驾驶舱（index/app/styles）
+   ├─ ui-preview.html          # 旧版完整 UI 原型（V0.3.2，硬编码）
    ├─ hex-map-preview.html     # 较早的纯地图原型
    ├─ screenshots/             # UI 截图
    └─ README.md                # HTML 发行版规划

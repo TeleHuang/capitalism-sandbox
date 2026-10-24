@@ -14,6 +14,8 @@
 | `7ea7a35` | 交接文档记录驾驶舱合并与版本树 |
 | `bfdcfee` | V0.4 版本树文档 |
 | `0f3888c` | 冲击验证套件 + 10 个会计不变量测试（cherry-pick 自 `feature/validation`） |
+| `fc32005` | 服务业/非正规自雇（cherry-pick 自 `feature/services`，50 tests） |
+| `9126504` | 驾驶舱行业标签支持服务业 |
 
 ## Feature 分支
 
@@ -21,7 +23,7 @@
 |---|---|---|---|
 | `feature/ui-cockpit` | `d8cdae7` | 已合并 | 本地 API 驾驶舱（Python http.server + HTML/JS） |
 | `feature/ui-comparison` | — | 暂停 | 第二套 UI 方案；worktree 保留 |
-| `feature/services` | 进行中 | 进行中 | 服务业/非正规部门，降低古典失业 |
+| `feature/services` | `79d27de` | 已合并 | 服务业/非正规自雇，古典失业 43%→9.3% |
 | `feature/l2` | `62f3217` | 暂停 | markup/LES 诊断脚本 WIP |
 | `feature/fertilizer` | `91e227e` | 暂停 | 化肥周转资金/供应修复 WIP |
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
