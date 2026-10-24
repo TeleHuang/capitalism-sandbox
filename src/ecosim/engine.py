@@ -1626,14 +1626,33 @@ class Engine:
         food_output = self.production_month.get(Good.FOOD, 0.0)
         ag_productivity = food_output / max(len(ag_workers), 1)
 
+        active_enterprises = list(self.active_enterprises())
         total_capital = 0.0
         total_profit = 0.0
-        for enterprise in self.active_enterprises():
+        total_revenue = 0.0
+        total_input_costs = 0.0
+        total_wages = 0.0
+        total_interest = 0.0
+        total_depreciation = 0.0
+        for enterprise in active_enterprises:
             total_capital += capital_value(enterprise, prices, self.land.price) + inventory_value(
                 enterprise, prices
             )
             total_profit += enterprise.last_profit
+            total_revenue += enterprise.last_revenue
+            total_input_costs += enterprise.last_costs
+            total_wages += enterprise.last_wages
+            total_interest += enterprise.last_interest
+            total_depreciation += (
+                equipment_value(enterprise, prices) / DEPRECIATION_MONTHS
+            )
         profit_rate = total_profit / total_capital if total_capital > 0 else 0.0
+        aggregate_inventory = {
+            good.value: sum(
+                enterprise.inv(good) for enterprise in active_enterprises
+            )
+            for good in Good
+        }
 
         firms_by_industry = {
             ind.value: len(self.active_enterprises(ind)) for ind in Industry
@@ -1737,9 +1756,22 @@ class Engine:
             "money_regime": government.money_regime.value if government else "gold",
             "price_regime": self.price_regime,
             "average_markup": (
-                sum(e.markup for e in self.active_enterprises())
-                / max(1, len(self.active_enterprises()))
+                sum(e.markup for e in active_enterprises)
+                / max(1, len(active_enterprises))
             ),
+            "revenue": total_revenue,
+            "input_costs": total_input_costs,
+            "wages": total_wages,
+            "interest": total_interest,
+            "depreciation": total_depreciation,
+            "profit": total_profit,
+            "inventory": aggregate_inventory,
+            "price_floors": {
+                good.value: self.market.floors.get(good, 0.0) for good in Good
+            },
+            "price_ceilings": {
+                good.value: self.market.ceilings.get(good, 0.0) for good in Good
+            },
             "estate_land": self.land.estate_land,
             "food_reserve": self.food_reserve.food,
             "food_reserve_cash": self.food_reserve.cash,
