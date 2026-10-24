@@ -78,8 +78,8 @@
 - 生育后：创建 `Worker(is_child=True, age_months=0, sex=random, parent_id=mother.id,
   cash=0, food=0, cloth=0, housing=0, skill=0)`；加入 `self.workers` 与
   `mother.children_ids`。
-- **再生产成本**：儿童每月消费篮子（建议：食品 0.05 吨、衣物 0.5 件、
-  住房 0.1 平米；成年人的 50%），由家长支付：
+- **再生产成本**：研究建议用 OECD 修正尺度约 **0.3 成人消费**（草案按
+  0.25–0.4 校准；食品/衣物/住房分别约 0.03–0.05/0.3–0.5/0.06–0.1），由家长支付：
   - 方案 A（推荐）：家长在 `_submit_household_orders` 中把儿童预算以现金
     转移给儿童（`child_allowance`），儿童自己挂买单；货币守恒、儿童有独立
     消费/饥饿记录。
@@ -97,7 +97,9 @@
 - 年龄别月度死亡概率：Gompertz 近似
   `q(age) = q0 + exp((age_years - m)/b) / 12`，或分段表。
 - 婴幼儿死亡率单独设 `infant_mortality`；老年上限 `max_age`。
-- 饥饿死亡保留现有逻辑，叠加年龄死亡；两者都消耗同一 seeded RNG，保持确定性。
+- 饥饿死亡保留现有逻辑，叠加年龄死亡；建议**独立 demographic RNG**
+  （`random.Random(seed + 常数)`）处理生育/年龄死亡/性别，`self.rng` 只做饥饿死亡，
+  避免新增抽样改变旧固定 seed 的死亡序列。
 - 参数建议（待研究校准）：
   - 古典：预期寿命 40–50，婴儿死亡率高；
   - Keynesian/MMT：预期寿命 75–80；
@@ -173,9 +175,14 @@
    测试/结果会变化，需要重新基线。
 6. **性能**：1200 月 × 更多人口；需要避免 O(n²) 家庭遍历；用 ID 列表。
 
-## 11. 待研究确认
+## 11. 研究结论
 
-- OLG/人口 ABM 的标准年龄别死亡率/生育率函数与参数；
-- 养老金 PAYG 的典型缴费率/替代率/退休年龄；
-- 儿童再生产成本占家庭收入的比例；
-- 历史剧本（前工业化/古典/Keynesian/MMT/晚期资本主义）的史实参数。
+已由研究代理完成，见 [[DEMOGRAPHICS_RESEARCH.md]]。关键结论：
+
+- 个体 agent + Household 容器；EcoSim 用 `parent_id`/`children_ids` 简化；
+- Gompertz 死亡 + ASFR 生育 + 月度 Bernoulli；
+- PAYG 养老金 `月养老金=ρ×平均工资`，`τ≈ρd+赤字/工资总额`；
+- 儿童 OECD 尺度约 0.3 成人；
+- 参数表：古典 TFR 5–6/e0 35–45；Keynesian 2.4–3.0/68–72；
+  MMT 1.8–2.1/75–78；晚期资本主义 1.2–1.6/80–84；
+- 独立 demographic RNG；养老金显式记账；儿童/退休者退出失业分母。
