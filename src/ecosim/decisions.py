@@ -109,6 +109,44 @@ def enterprise_ask_price(engine: "Engine", enterprise: "Enterprise") -> float:
         price = min(price, ref * 1.30)
         return max(0.01, price)
 
+    if getattr(engine, "price_regime", "band") == "markup_soft":
+        # L2 折中：成本加成给出目标价，但目标价被软走廊锚定在参考价附近。
+        # 它保留成本信号（避免自由 markup 在固定篮子需求下崩溃），同时
+        # 用 0.85–1.15×ref 的走廊阻止价格战和通胀螺旋。
+        if cost <= 0:
+            # 没有可用成本信号时退回参考价，不再尝试加成。
+            return max(0.01, ref)
+        target_months = max(enterprise.target_inventory_months, 0.5)
+        gap = (target_months - months) / target_months
+        # 慢速调整：按库存缺口每月调整 0.01×gap，避免单月跳价。
+        enterprise.markup = min(
+            0.40, max(0.02, enterprise.markup + 0.01 * gap)
+        )
+        desired = cost * (1.0 + enterprise.markup)
+        # 先限制在成本带内，再套参考价软走廊。成本带放在走廊内侧，
+        # 否则成本极低的行业会把卖价压到走廊下沿以下，使“软走廊”
+        # 名存实亡。
+        price = min(max(desired, cost * 0.80), cost * 2.0)
+        price = min(max(price, ref * 0.85), ref * 1.15)
+
+        # 市场出清护栏（仅 markup_soft）：买方报价通常在参考价的
+        # 1.02–1.06 倍，卖价高于该区间会整月无成交；固定篮子下
+        # 一次食品市场冻结就足以引发饥荒。因此库存正常时把卖价
+        # 锚回 ref±2%，只有库存极高/极低时才向宽走廊的两端让价/抬价。
+        if months > 3.0:
+            # 高库存：允许让价，但 0.90×ref 已足以清库存；更深的
+            # 折价会侵蚀行业现金流（240 月古典测试中 0.85 下沿造成死亡）。
+            lo, hi = ref * 0.90, ref * 0.98
+        elif months < 0.5 and sales > 1e-6:
+            lo, hi = ref * 1.00, ref * (1.05 if out == Good.FOOD else 1.04)
+        else:
+            lo, hi = ref * 0.98, ref * 1.02
+        price = min(max(price, lo), hi)
+        # 成本下限在软走廊内不可行（cost×0.8 > 1.15×ref）时，
+        # 优先保证卖价处于可成交的走廊内。
+        price = max(price, min(cost * 0.80, ref * 1.15))
+        return max(0.01, price)
+
     if months > 3.0:
         price = min(ref * 0.90, cost * 1.05 if cost > 0 else ref * 0.90)
     elif months < 0.5:

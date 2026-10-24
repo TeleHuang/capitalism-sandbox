@@ -62,6 +62,16 @@ KEYNESIAN_WELFARE = ScenarioConfig(
     government_cash=10_000.0,
 )
 
+# L2 可选预设：古典制度 + 成本加成目标价 + 参考价软走廊。
+# 其他政策制度可用 dataclasses.replace(config, price_regime="markup_soft")
+# 叠加，不需要为每个制度单独复制一份配置。
+MARKUP_SOFT = ScenarioConfig(
+    name="古典自由放任 + 软成本加成定价（实验）",
+    policy_regime=PolicyRegime.CLASSICAL,
+    money_regime=MoneyRegime.GOLD,
+    price_regime="markup_soft",
+)
+
 MMT_SOVEREIGN = ScenarioConfig(
     name="MMT 主权货币 + 就业保障",
     policy_regime=PolicyRegime.MMT,

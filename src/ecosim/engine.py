@@ -103,7 +103,9 @@ class Engine:
         self.government: Optional[Government] = None
         # 古典剧本允许工资低于制度性生存线；Keynesian/MMT 保持最低工资。
         self.wage_floor_scale: float = 1.0
-        # "band" = 参考价 + 成本价格带；"markup" = 成本加成 + 软走廊。
+        # "band" = 参考价 + 成本价格带（默认）；
+        # "markup" = 自由成本加成（实验，固定篮子下易崩溃）；
+        # "markup_soft" = 成本加成目标价 + 参考价软走廊（0.85–1.15×ref）。
         self.price_regime: str = "band"
         # "fixed" = 固定温饱篮子；"les" = Stone-Geary 需求（价格弹性）。
         self.demand_regime: str = "fixed"
