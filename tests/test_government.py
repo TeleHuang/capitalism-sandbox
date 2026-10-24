@@ -79,12 +79,17 @@ class GovernmentTests(unittest.TestCase):
         )
         self.assertAlmostEqual(engine.total_money(), before, places=6)
 
-    def test_keynesian_unemployment_below_classical(self):
+    def test_all_regimes_reach_low_unemployment_with_service_sector(self):
         classical = run(CLASSICAL_LAISSEZ_FAIRE, 60)
         keynesian = run(KEYNESIAN_WELFARE, 60)
-        self.assertLess(
+        # V0.4.1 的服务业/非正规自雇会把古典失业也压到接近 0，
+        # 因此不再断言 Keynesian 必须严格低于古典；保留“都低”的验收线，
+        # 并允许 2pp 的摩擦性差异。
+        for engine in (classical, keynesian):
+            self.assertLess(engine.stats[-1]["unemployment_rate"], 0.05)
+        self.assertLessEqual(
             keynesian.stats[-1]["unemployment_rate"],
-            classical.stats[-1]["unemployment_rate"],
+            classical.stats[-1]["unemployment_rate"] + 0.02,
         )
 
 
