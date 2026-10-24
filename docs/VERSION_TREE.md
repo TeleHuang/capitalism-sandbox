@@ -12,6 +12,8 @@
 | `506d92e` | stats 增加利润分解/库存/价格带诊断字段 |
 | `7926334` | 前后端分离 V0.4 驾驶舱（cherry-pick 自 `feature/ui-cockpit`） |
 | `7ea7a35` | 交接文档记录驾驶舱合并与版本树 |
+| `bfdcfee` | V0.4 版本树文档 |
+| `0f3888c` | 冲击验证套件 + 10 个会计不变量测试（cherry-pick 自 `feature/validation`） |
 
 ## Feature 分支
 
@@ -22,7 +24,7 @@
 | `feature/services` | 进行中 | 进行中 | 服务业/非正规部门，降低古典失业 |
 | `feature/l2` | `62f3217` | 暂停 | markup/LES 诊断脚本 WIP |
 | `feature/fertilizer` | `91e227e` | 暂停 | 化肥周转资金/供应修复 WIP |
-| `feature/validation` | 进行中 | 进行中 | 冲击测试、不变量、验证报告 |
+| `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
 
 ## UI 启动
 
