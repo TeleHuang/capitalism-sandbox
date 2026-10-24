@@ -74,6 +74,7 @@ from .models import (
     Worker,
 )
 from .production import (
+    average_skill,
     capital_value,
     capacity_at_skill_one,
     desired_workers,
@@ -466,7 +467,11 @@ class Engine:
         }
         capacity_by_industry: Dict[Industry, float] = defaultdict(float)
         for enterprise in self.active_enterprises():
-            capacity_by_industry[enterprise.industry] += capacity_at_skill_one(enterprise)
+            workers = self.enterprise_workers(enterprise)
+            skill = max(1.0, average_skill(workers)) if workers else 1.0
+            capacity_by_industry[enterprise.industry] += (
+                capacity_at_skill_one(enterprise) * skill
+            )
         food_stock = sum(
             enterprise.inv(Good.FOOD)
             for enterprise in self.active_enterprises(Industry.AGRICULTURE)
@@ -488,7 +493,9 @@ class Engine:
             out = params.output
             history = self.market.history[out]
             last_sales = enterprise.last_sales.get(out, 0.0)
-            capacity = capacity_at_skill_one(enterprise)
+            workers = self.enterprise_workers(enterprise)
+            skill = max(1.0, average_skill(workers)) if workers else 1.0
+            capacity = capacity_at_skill_one(enterprise) * skill
             total_capacity = capacity_by_industry[enterprise.industry]
             if total_capacity > 1e-9:
                 share = capacity / total_capacity
@@ -525,14 +532,20 @@ class Engine:
             )
             plan = desired / capacity
 
-            # 中间投入/资本品是产业链的底仓：不能因为当期销售为 0
-            # 就完全封存，否则煤停→钢停→机械停→煤更停。
-            if inventory > 24.0 * max(
-                enterprise.demand_forecast, capacity * 0.05
+            # 中间投入/资本品是产业链的底仓；但“最低运行率”必须
+            # 跟当前需求走，否则低需求行业会按固定 10% 产能无限累库。
+            demand_ratio = enterprise.demand_forecast / max(capacity, 1e-9)
+            if inventory > 12.0 * max(
+                enterprise.demand_forecast, capacity * 0.02
             ):
-                plan = min(plan, 0.1) if out in essential else 0.0
+                # 库存超过约 12 个月需求：只保留 2% 产能的涓流，
+                # 既停止大规模累库，又避免核心行业整月零产出。
+                plan = min(plan, 0.02) if out in essential else 0.0
             elif out in essential:
-                plan = max(plan, 0.1)
+                plan = max(
+                    plan,
+                    min(0.1, max(0.0, 0.9 * demand_ratio)),
+                )
 
             if out == Good.FOOD and food_stock < 3.0 * monthly_food_need:
                 # 食品是生存品：库存低于 3 个月时保持满产。
@@ -573,6 +586,18 @@ class Engine:
 
         for enterprise in self.active_enterprises():
             workers = self.enterprise_workers(enterprise)
+            if (
+                enterprise.is_household
+                and enterprise.industry == Industry.SERVICE
+            ):
+                # 自雇摊主不是雇员：不能再领一份工资，否则会和
+                # _finance 的经营所得 payout 重复计入，制造负利润。
+                for worker in workers:
+                    worker.wage = 0.0
+                    worker.hours = worker.choose_hours(prices)
+                offers[enterprise.id] = 0.0
+                vacancies[enterprise.id] = 0
+                continue
             required = desired_workers(enterprise, plan=enterprise.plan_ratio)
             effective = sum(w.effective_labor for w in workers)
             if required <= 0:
@@ -1943,10 +1968,16 @@ class Engine:
         total_wages = 0.0
         total_interest = 0.0
         total_depreciation = 0.0
+        capitalist_capital = 0.0
+        capitalist_profit = 0.0
+        household_capital = 0.0
+        household_profit = 0.0
         for enterprise in active_enterprises:
-            total_capital += capital_value(enterprise, prices, self.land.price) + inventory_value(
-                enterprise, prices
+            enterprise_capital = (
+                capital_value(enterprise, prices, self.land.price)
+                + inventory_value(enterprise, prices)
             )
+            total_capital += enterprise_capital
             total_profit += enterprise.last_profit
             total_revenue += enterprise.last_revenue
             total_input_costs += enterprise.last_costs
@@ -1955,7 +1986,20 @@ class Engine:
             total_depreciation += (
                 equipment_value(enterprise, prices) / DEPRECIATION_MONTHS
             )
-        profit_rate = total_profit / total_capital if total_capital > 0 else 0.0
+            if enterprise.is_household:
+                household_capital += enterprise_capital
+                household_profit += enterprise.last_profit
+            else:
+                capitalist_capital += enterprise_capital
+                capitalist_profit += enterprise.last_profit
+        # “全社会利润率”只统计资本主义企业（非 household）：
+        # 家庭农场/服务自雇的所有者劳动收入不是资本回报，混入会系统性压低利润率。
+        profit_rate = (
+            capitalist_profit / capitalist_capital
+            if capitalist_capital > 0
+            else 0.0
+        )
+        all_profit_rate = total_profit / total_capital if total_capital > 0 else 0.0
         aggregate_inventory = {
             good.value: sum(
                 enterprise.inv(good) for enterprise in active_enterprises
@@ -2102,7 +2146,12 @@ class Engine:
             "investment": self.market.investment_spending,
             "unemployment_rate": unemployed / max(len(alive_workers), 1),
             "profit_rate": profit_rate,
+            "all_profit_rate": all_profit_rate,
             "capital_stock": total_capital,
+            "capitalist_capital_stock": capitalist_capital,
+            "capitalist_profit": capitalist_profit,
+            "household_capital": household_capital,
+            "household_profit": household_profit,
             "ag_productivity": ag_productivity,
             "food_output": food_output,
             "prices": {g.value: prices[g] for g in Good},

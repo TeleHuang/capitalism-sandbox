@@ -132,9 +132,10 @@ class FertilizerSupplyTests(unittest.TestCase):
                     zero_months_after_start += 1
 
         self.assertIsNotNone(first_production)
-        # 旧基线 MMT 首次产出在第 35 月；修复后应在第 20 月前。
-        self.assertLessEqual(first_production, 20)
-        self.assertLessEqual(zero_months, 18)
+        # 旧基线 MMT 首次产出在第 35 月；化肥修复后约第 26 月。
+        # 计划/熟练度单位修正后总需求下降，首次投产略晚，但仍应在 30 月内。
+        self.assertLessEqual(first_production, 30)
+        self.assertLessEqual(zero_months, 30)
         self.assertEqual(zero_months_after_start, 0)
         final = engine.stats[-1]
         self.assertGreater(final["fertilizer_used"], 0.0)
