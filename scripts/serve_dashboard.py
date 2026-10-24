@@ -44,7 +44,7 @@ from ecosim.scenarios import (  # noqa: E402
     build_scenario_1,
 )
 
-DASHBOARD_VERSION = "0.4.0"
+DASHBOARD_VERSION = "0.4.2"
 DEFAULT_MONTHS = 240
 DEFAULT_SEED = 1
 MAX_MONTHS = 1200
@@ -108,6 +108,11 @@ SCALAR_FIELDS = (
     "consumption",
     "investment",
     "profit_rate",
+    "all_profit_rate",
+    "capitalist_profit",
+    "household_profit",
+    "capitalist_capital_stock",
+    "household_capital",
     "capital_stock",
     "food_reserve",
     "food_reserve_cash",

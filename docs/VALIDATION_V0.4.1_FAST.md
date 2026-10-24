@@ -1,5 +1,8 @@
 # V0.4.1 快速冲击验证（1 seed，当前主线）
 
+> **V0.4.2 注**：本报告生成于“计划按熟练度调整产能”修复之前。修复后利润率、
+> 库存和投资已变化；冲击的绝对数值需在 V0.4.2 主线重跑，方向性结论仍可参考。
+>
 > 运行：`PYTHONPATH=src python scripts/validate_v04.py --fast --no-placebo --no-series-in-json`
 > 时间：2026-10-25 01:55；月数 240；seed=1；冲击起点 T120、持续 12 月。
 > 完整自动报告：[[VALIDATION_V0.4.1_FAST_REPORT.md]]；摘要 CSV：

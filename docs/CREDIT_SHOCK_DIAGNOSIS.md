@@ -1,5 +1,10 @@
 # 信贷冲击死亡诊断（V0.4.1）
 
+> **V0.4.2 注**：本诊断生成于“计划按熟练度调整产能”修复之前。该修复改变了
+> 生产/库存/现金流，信贷冲击死亡数可能变化；下一轮应在 V0.4.2 主线重跑
+> `scripts/diagnose_credit_shock.py`，本文件的机制判断（食品市场出清、零现金
+> 工人买不起）仍可作为调查方向。
+>
 > 只读诊断：复现 `scripts/validate_v04.py` 的信贷冲击，逐月记录食品市场、现金分布、
 > 饥饿与死亡。脚本：`scripts/diagnose_credit_shock.py`。
 > 关联：[[VALIDATION_V0.4.1_FAST.md]]、[[VALIDATION_V0.4.1_FAST_REPORT.md]]。

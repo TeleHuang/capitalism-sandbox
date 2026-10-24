@@ -41,3 +41,6 @@ llm_cache.json
 
 # 自动交接快照（本地日志）
 /docs/COMPACT_LOG.md
+
+# 用户本地截图/临时图片
+/image.png

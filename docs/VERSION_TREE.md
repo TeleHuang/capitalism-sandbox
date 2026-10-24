@@ -22,6 +22,7 @@
 | `ac48286` | V0.4.1 驾驶舱最终截图（服务业+化肥） |
 | `40e4f68` | V0.4.1 快速冲击验证归档 |
 | `93205ff` | 信贷冲击死亡链诊断（食品市场出清但零现金工人买不起） |
+| `d2ffbcb` | 计划/熟练度单位修复 + 利润率资本主义部门口径（cherry-pick 自 `feature/plan-skill`，65 tests） |
 
 ## Feature 分支
 
@@ -32,6 +33,7 @@
 | `feature/services` | `79d27de` | 已合并 | 服务业/非正规自雇，古典失业 43%→9.3% |
 | `feature/l2` | `62f3217` | 暂停 | 自由 markup/LES 诊断脚本 WIP |
 | `feature/l2-soft` | `7c97df0` | 已合并 | 参考价锚定的软 markup（成本加成 + ±15% 走廊，主线 `ed4549a`） |
+| `feature/plan-skill` | `ed231e1` | 已合并 | 计划按熟练度调整产能、负利润率修正（主线 `d2ffbcb`） |
 | `feature/fertilizer` | `61fae0e` | 已合并 | 化肥周转资金/招聘优先/2 台上限（主线 `f3d4248`） |
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
 
