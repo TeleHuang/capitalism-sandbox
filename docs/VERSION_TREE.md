@@ -16,6 +16,8 @@
 | `0f3888c` | 冲击验证套件 + 10 个会计不变量测试（cherry-pick 自 `feature/validation`） |
 | `fc32005` | 服务业/非正规自雇（cherry-pick 自 `feature/services`，50 tests） |
 | `9126504` | 驾驶舱行业标签支持服务业 |
+| `f3d4248` | 化肥周转资金/招聘优先/2 台上限（cherry-pick 自 `feature/fertilizer`） |
+| `9e6b002` | 服务业加入后调整政府失业比较断言（55 tests） |
 
 ## Feature 分支
 
@@ -25,7 +27,7 @@
 | `feature/ui-comparison` | — | 暂停 | 第二套 UI 方案；worktree 保留 |
 | `feature/services` | `79d27de` | 已合并 | 服务业/非正规自雇，古典失业 43%→9.3% |
 | `feature/l2` | `62f3217` | 暂停 | markup/LES 诊断脚本 WIP |
-| `feature/fertilizer` | `91e227e` | 暂停 | 化肥周转资金/供应修复 WIP |
+| `feature/fertilizer` | `61fae0e` | 已合并 | 化肥周转资金/招聘优先/2 台上限（主线 `f3d4248`） |
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
 
 ## UI 启动
