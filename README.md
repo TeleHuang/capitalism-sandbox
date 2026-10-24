@@ -6,7 +6,7 @@
 长期目标是用 LLM 扮演经理和董事；当前里程碑是先把规则驱动的经济内核做扎实。
 
 > 状态：**V0.4 — 负反馈修复、历史阶段与本地驾驶舱；单文件 HTML 发行版尚未同步。**
-> 引擎可运行、固定随机种子可复现，并有 55 个回归测试。新增古典/Keynesian/MMT
+> 引擎可运行、固定随机种子可复现，并有 65 个回归测试。新增古典/Keynesian/MMT
 > 三种政策制度、生产—库存闭环、需求约束投资、劳动市场修正、粮食平准库存、
 > 服务业/非正规自雇，以及前后端分离的本地驾驶舱。
 > LLM 智能体、合同、期货订单和最终单文件 HTML 仍是刻意推迟的内容。
@@ -53,7 +53,13 @@ $env:PYTHONPATH = "src"
 python -m ecosim --months 240 --seed 1 --regime classical
 python -m ecosim --months 240 --seed 1 --regime keynesian
 python -m ecosim --months 240 --seed 1 --regime mmt
+
+# 可选价格制度：参考价锚定的软成本加成（实验预设）
+python -m ecosim --months 240 --seed 1 --regime classical --price-regime markup_soft
 ```
+
+默认价格制度是 `band`（参考价 + 成本带）。`markup_soft` 把成本加成目标价
+限制在参考价 ±15% 的软走廊内，并带库存调整；它是可选实验预设，尚未设为默认。
 
 政策/货币/税收/救济/公共投资/就业保障参数集中在
 `src/ecosim/scenarios.py` 的 `ScenarioConfig`；设计说明见
@@ -116,8 +122,8 @@ python scripts/llm_probe.py --months 60 --industry fertilizer_factory
 - 完整 LLM 经理/董事智能体与管理层级；当前只有本地探针，未接入仿真。
 - 合同、期货/订单生产、跨月平滑采购。
 - 单文件 HTML 发行版尚未同步 V0.4；当前入口是命令行 + 本地驾驶舱。
-- L2 成本加成 + LES 需求仍是实验分支（`price_regime="markup"` /
-  `demand_regime="les"`），默认仍是成本价格带 + 固定篮子。
+- `price_regime="markup_soft"` 已作为可选预设实现；自由 `markup` 与
+  `demand_regime="les"` 仍是实验分支，默认仍是成本价格带 + 固定篮子。
 - 场景 0（铁器时代）和场景 2（晚期资本主义）的完整配置。
 - 多种资本品；V0.3 使用一个通用 `MACHINERY` 商品，钢铁厂用 `BRICK`，机床用 `STEEL`。
 

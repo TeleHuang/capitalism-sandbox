@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from .engine import Engine
@@ -67,9 +68,18 @@ def main(argv: list[str] | None = None) -> int:
         default="classical",
         help="政策制度：classical（自由放任）/ keynesian（福利国家）/ mmt（主权货币+就业保障）",
     )
+    parser.add_argument(
+        "--price-regime",
+        choices=("band", "markup_soft"),
+        default="band",
+        help="价格制度：band（默认参考价+成本带）/ markup_soft（参考价锚定的软成本加成）",
+    )
     args = parser.parse_args(argv)
 
-    engine = run(args.months, args.seed, args.every, REGIMES[args.regime])
+    scenario = REGIMES[args.regime]
+    if args.price_regime != "band":
+        scenario = replace(scenario, price_regime=args.price_regime)
+    engine = run(args.months, args.seed, args.every, scenario)
     final = engine.stats[-1]
     print()
     print("最终状态")
@@ -97,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         f"自耕农土地：{final['smallholder_land']:.0f} 亩"
     )
     print(f"  货币总量：{final['money_total']:.0f}（初始 {engine.money_initial:.0f}）")
-    print(f"  政策制度：{args.regime}")
+    print(f"  政策制度：{args.regime}  价格制度：{args.price_regime}")
     if final.get("policy_regime") != "classical":
         print(
             f"  政府现金/债务：{final['government_cash']:.0f} / "

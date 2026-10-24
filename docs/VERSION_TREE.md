@@ -18,6 +18,7 @@
 | `9126504` | 驾驶舱行业标签支持服务业 |
 | `f3d4248` | 化肥周转资金/招聘优先/2 台上限（cherry-pick 自 `feature/fertilizer`） |
 | `9e6b002` | 服务业加入后调整政府失业比较断言（55 tests） |
+| `ed4549a` | 参考价锚定的软 markup 可选预设（cherry-pick 自 `feature/l2-soft`，65 tests） |
 
 ## Feature 分支
 
@@ -27,7 +28,7 @@
 | `feature/ui-comparison` | — | 暂停 | 第二套 UI 方案；worktree 保留 |
 | `feature/services` | `79d27de` | 已合并 | 服务业/非正规自雇，古典失业 43%→9.3% |
 | `feature/l2` | `62f3217` | 暂停 | 自由 markup/LES 诊断脚本 WIP |
-| `feature/l2-soft` | 进行中 | 进行中 | 参考价锚定的软 markup（成本加成 + ±15% 走廊） |
+| `feature/l2-soft` | `7c97df0` | 已合并 | 参考价锚定的软 markup（成本加成 + ±15% 走廊，主线 `ed4549a`） |
 | `feature/fertilizer` | `61fae0e` | 已合并 | 化肥周转资金/招聘优先/2 台上限（主线 `f3d4248`） |
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
 
