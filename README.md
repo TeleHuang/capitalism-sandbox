@@ -76,10 +76,9 @@ python -m unittest discover -s tests -v
 ├─ 04_开发日志文档.md
 ├─ src/ecosim/                 # simulation package
 ├─ tests/                      # deterministic regression tests
-├─ docs/
-│  ├─ REQUIREMENTS_REVIEW.md   # conflicts / open questions / options for the human
-│  └─ decisions/               # architecture decision records
-└─ scripts/
+└─ docs/
+   ├─ REQUIREMENTS_REVIEW.md   # conflicts / open questions / options for the human
+   └─ decisions/               # architecture decision records
 ```
 
 ## Development workflow
