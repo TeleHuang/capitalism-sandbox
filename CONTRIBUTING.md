@@ -41,7 +41,7 @@
 
 ## HTML 发行版约定
 
-- Python 是逻辑参考实现；HTML 是最终发行版。
-- HTML 版本必须能在浏览器直接运行，不要求安装 Python。
+- Python 是逻辑参考实现；HTML（TypeScript/JavaScript）是最终发行版。
+- HTML 版本只包含一个 HTML 文件，能在电脑/手机浏览器直接打开，不要求安装 Python。
 - 两套实现共享同一套经济逻辑定义；用固定随机种子的黄金运行样例约束结果一致。
 - 在 HTML 版本落地前，所有规则改动以 Python 参考实现和测试为准。

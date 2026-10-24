@@ -508,7 +508,7 @@ class Engine:
             params = SECTOR_PARAMS[industry]
             if len(self.active_enterprises(industry)) >= params.max_firms:
                 continue
-            choice = best_equipment_choice(self, industry)
+            choice = best_equipment_choice(self, industry, budget=100_000.0)
             if choice is None:
                 continue
             key, roi = choice
@@ -947,7 +947,7 @@ class Engine:
             for e in self.active_enterprises(Industry.AGRICULTURE)
         )
         farm_machinery = sum(
-            e.equipment.get("farm_machinery", 0)
+            sum(v for k, v in e.equipment.items() if k.startswith("farm_"))
             for e in self.active_enterprises(Industry.AGRICULTURE)
         )
 

@@ -39,7 +39,7 @@ def run_land_market(engine: "Engine") -> None:
             continue
         if ent.land >= TARGET_CAPITALIST_FARM_MU:
             continue
-        key, roi = best_equipment_choice(engine, Industry.AGRICULTURE) or ("farm_machinery", -1.0)
+        key, roi = best_equipment_choice(engine, Industry.AGRICULTURE) or ("farm_t0", -1.0)
         if roi < INVESTMENT_HURDLE:
             continue
         want = min(TARGET_CAPITALIST_FARM_MU - ent.land, 50.0)

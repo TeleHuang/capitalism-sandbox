@@ -148,23 +148,27 @@ def input_needs(engine: "Engine", enterprise: "Enterprise") -> dict[Good, float]
 
 
 def best_equipment_choice(
-    engine: "Engine", industry: Industry
+    engine: "Engine", industry: Industry, budget: Optional[float] = None
 ) -> Optional[tuple[str, float]]:
     prices = engine.market.reference_prices
     wage = engine.average_wage()
     land_price = engine.land.price
-    best_key = None
-    best_roi = -1e9
+    candidates = []
     for key in SECTOR_PARAMS[industry].equipment:
         et = EQUIPMENT[key]
         if et.capital_good is None or et.build_months <= 0:
             continue
+        cost = equipment_cost(key, prices)
+        if budget is not None and cost > budget:
+            continue
         roi = representative_roi(industry, key, prices, wage, land_price)
-        if roi > best_roi:
-            best_roi = roi
-            best_key = key
-    if best_key is None:
+        candidates.append((cost, key, roi))
+    if not candidates:
         return None
+    # 企业优先选择“能负担的最小规模”，避免一上来就追求 128× 设备、
+    # 把资本品需求和项目现金推到不可完成的程度；后续再按需求升级。
+    candidates.sort(key=lambda item: (item[0], -item[2]))
+    _, best_key, best_roi = candidates[0]
     return best_key, best_roi
 
 
@@ -173,17 +177,20 @@ def should_invest(engine: "Engine", enterprise: "Enterprise") -> Optional[tuple[
         return None
     if enterprise.industry == Industry.AGRICULTURE and not enterprise.modernization_capable:
         return None
-    choice = best_equipment_choice(engine, enterprise.industry)
+    workers = engine.enterprise_workers(enterprise)
+    wage_bill = sum(w.wage * w.effective_labor for w in workers)
+    reserve = max(wage_bill * 3.0, 100.0)
+    available = enterprise.cash - reserve
+    if available <= 0:
+        return None
+    choice = best_equipment_choice(engine, enterprise.industry, budget=available / 1.10)
     if choice is None:
         return None
     key, roi = choice
     if roi < INVESTMENT_HURDLE:
         return None
-    workers = engine.enterprise_workers(enterprise)
-    wage_bill = sum(w.wage * w.effective_labor for w in workers)
-    reserve = max(wage_bill * 3.0, 100.0)
     cost = equipment_cost(key, engine.market.reference_prices)
-    if enterprise.cash < cost * 1.25 + reserve:
+    if enterprise.cash < cost * 1.10 + reserve:
         return None
     if engine.tick - enterprise.last_invest_tick < 6:
         return None
@@ -192,12 +199,12 @@ def should_invest(engine: "Engine", enterprise: "Enterprise") -> Optional[tuple[
 
 def agricultural_entry_roi(engine: "Engine") -> tuple[str, float]:
     """一台农机的新资本主义农场的 ROI。"""
-    return best_equipment_choice(engine, Industry.AGRICULTURE) or ("farm_machinery", -1.0)
+    return best_equipment_choice(engine, Industry.AGRICULTURE) or ("farm_t0", -1.0)
 
 
 def farm_capital_per_mu(engine: "Engine") -> float:
     return engine.land.price + equipment_cost(
-        "farm_machinery", engine.market.reference_prices
+        "farm_t0", engine.market.reference_prices
     ) / max(1.0, LAND_PER_WORKER_BASE * 2.0)
 
 

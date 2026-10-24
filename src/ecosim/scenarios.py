@@ -86,13 +86,13 @@ def build_scenario_1(engine: Engine) -> Engine:
                 enterprise.workers.append(worker.id)
             _seed_inputs(engine, enterprise)
 
-    add_industry(Industry.COAL_MINE, 20, 10, {"hand_mine": 1})
-    add_industry(Industry.IRON_MINE, 8, 10, {"hand_mine": 1})
-    add_industry(Industry.STEEL_MILL, 3, 13, {"furnace_20": 1}, extra_workers=1)
-    add_industry(Industry.BRICK_FACTORY, 1, 50, {"brick_kiln": 1})
-    add_industry(Industry.TEXTILE_MILL, 1, 20, {"hand_loom": 20})
-    add_industry(Industry.MACHINERY_FACTORY, 1, 10, {"hand_forge": 1})
-    add_industry(Industry.CONSTRUCTION, 5, 20, {"hand_crew": 1})
+    add_industry(Industry.COAL_MINE, 20, 10, {"coal_t0": 1})
+    add_industry(Industry.IRON_MINE, 8, 10, {"iron_t0": 1})
+    add_industry(Industry.STEEL_MILL, 3, 4, {"steel_t0": 1})
+    add_industry(Industry.BRICK_FACTORY, 1, 50, {"brick_t0": 1})
+    add_industry(Industry.TEXTILE_MILL, 1, 20, {"textile_t0": 20})
+    add_industry(Industry.MACHINERY_FACTORY, 1, 10, {"machinery_t0": 1})
+    add_industry(Industry.CONSTRUCTION, 5, 25, {"construction_t0": 1}, extra_workers=3)
     # 化肥 starts empty; it is an entry opportunity once food/coal prices
     # 它会成为一个进入机会。
 

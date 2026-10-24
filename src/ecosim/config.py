@@ -61,9 +61,9 @@ MAX_HIRES_PER_ENTERPRISE_PER_MONTH = 20
 # 资产阶级
 CAPITALIST_CONSUMPTION_RATE = 0.02   # 每月消费现金比例
 CAPITALIST_MIN_CONSUMPTION = 100.0
-CAPITALIST_FOOD = 0.1
-CAPITALIST_CLOTH = 5.0
-CAPITALIST_HOUSING = 1.0
+CAPITALIST_FOOD = 0.15
+CAPITALIST_CLOTH = 1.5
+CAPITALIST_HOUSING = 0.3
 
 # 投资
 INVESTMENT_HURDLE = 0.012            # 最低预期月资本回报率
@@ -122,177 +122,81 @@ class SectorParams:
     is_resource: bool = False
 
 
-EQUIPMENT: Dict[str, EquipmentType] = {
-    # 农业：农机提高人均土地，不直接提高亩产。
-    "farm_machinery": EquipmentType(
-        key="farm_machinery",
-        label="农机",
-        industry=Industry.AGRICULTURE,
-        capacity=0.0,
-        workers=0,
-        capital_good=Good.MACHINERY,
-        capital_cost=1.0,
-        build_months=2,
-        power=1.0,
-        building_cost=0.0,
-    ),
-    # 煤炭 / 铁矿
-    "hand_mine": EquipmentType(
-        key="hand_mine",
-        label="手工矿井",
-        industry=Industry.COAL_MINE,
-        capacity=10.0,
-        workers=10,
-        capital_good=None,
-    ),
-    "mechanized_mine": EquipmentType(
-        key="mechanized_mine",
-        label="机械化矿井",
-        industry=Industry.COAL_MINE,
-        capacity=100.0,
-        workers=10,
-        capital_good=Good.MACHINERY,
-        capital_cost=5.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-    # 炼钢：2 的 N 次方炉型，熟练度 1 时基准为 20 吨。
-    "furnace_20": EquipmentType(
-        key="furnace_20",
-        label="20 吨炼钢炉",
-        industry=Industry.STEEL_MILL,
-        capacity=20.0,
-        workers=12,
-        capital_good=Good.BRICK,
-        capital_cost=200.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-    "furnace_40": EquipmentType(
-        key="furnace_40",
-        label="40 吨炼钢炉",
-        industry=Industry.STEEL_MILL,
-        capacity=40.0,
-        workers=13,
-        capital_good=Good.BRICK,
-        capital_cost=400.0,
-        build_months=3,
-        building_cost=0.0,
-    ),
-    "furnace_80": EquipmentType(
-        key="furnace_80",
-        label="80 吨炼钢炉",
-        industry=Industry.STEEL_MILL,
-        capacity=80.0,
-        workers=14,
-        capital_good=Good.BRICK,
-        capital_cost=800.0,
-        build_months=4,
-        building_cost=0.0,
-    ),
-    # 砖
-    "brick_kiln": EquipmentType(
-        key="brick_kiln",
-        label="砖窑",
-        industry=Industry.BRICK_FACTORY,
-        capacity=100.0,
-        workers=50,
-        capital_good=Good.BRICK,
-        capital_cost=100.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-    "brick_kiln_large": EquipmentType(
-        key="brick_kiln_large",
-        label="大型砖窑",
-        industry=Industry.BRICK_FACTORY,
-        capacity=200.0,
-        workers=55,
-        capital_good=Good.BRICK,
-        capital_cost=300.0,
-        build_months=3,
-        building_cost=0.0,
-    ),
-    # 纺织
-    "hand_loom": EquipmentType(
-        key="hand_loom",
-        label="手织机",
-        industry=Industry.TEXTILE_MILL,
-        capacity=50.0,
-        workers=1,
-        capital_good=None,
-    ),
-    "industrial_loom": EquipmentType(
-        key="industrial_loom",
-        label="工业织机",
-        industry=Industry.TEXTILE_MILL,
-        capacity=500.0,
-        workers=5,
-        capital_good=Good.MACHINERY,
-        capital_cost=5.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-    # 机械
-    "hand_forge": EquipmentType(
-        key="hand_forge",
-        label="手工锻炉",
-        industry=Industry.MACHINERY_FACTORY,
-        capacity=5.0,
-        workers=10,
-        capital_good=None,
-    ),
-    "machine_tool": EquipmentType(
-        key="machine_tool",
-        label="机床",
-        industry=Industry.MACHINERY_FACTORY,
-        capacity=20.0,
-        workers=10,
-        capital_good=Good.STEEL,
-        capital_cost=20.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-    # 施工
-    "hand_crew": EquipmentType(
-        key="hand_crew",
-        label="手工施工队",
-        industry=Industry.CONSTRUCTION,
-        capacity=50.0,
-        workers=20,
-        capital_good=None,
-    ),
-    "construction_machinery": EquipmentType(
-        key="construction_machinery",
-        label="施工机械",
-        industry=Industry.CONSTRUCTION,
-        capacity=100.0,
-        workers=10,
-        capital_good=Good.MACHINERY,
-        capital_cost=3.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-    # 化肥
-    "reactor": EquipmentType(
-        key="reactor",
-        label="化肥反应炉",
-        industry=Industry.FERTILIZER_FACTORY,
-        capacity=20.0,
-        workers=5,
-        capital_good=Good.MACHINERY,
-        capital_cost=1.0,
-        build_months=2,
-        building_cost=0.0,
-    ),
-}
+def _make_equipment_tiers(
+    prefix: str,
+    industry: Industry,
+    label: str,
+    base_capacity: float,
+    base_workers: int,
+    capital_good: Good | None,
+    t0_cost: float,
+    upgrade_cost: float,
+    base_build_months: int,
+    power_base: float = 0.0,
+) -> Dict[str, EquipmentType]:
+    """生成 8 个 2 的 N 次方设备等级。
+
+    n=0..7 对应 1×、2×、4×……128×。产能翻倍，工人 +1；t0 可以是
+    纯手工设备（造价 0），t1 起使用资本品。农业的 power 逐级翻倍。
+    """
+    result: Dict[str, EquipmentType] = {}
+    for n in range(8):
+        key = f"{prefix}_t{n}"
+        if n == 0:
+            cost = t0_cost
+            good = capital_good if t0_cost > 0 else None
+        else:
+            cost = upgrade_cost * (2 ** (n - 1))
+            good = capital_good
+        result[key] = EquipmentType(
+            key=key,
+            label=f"{label} {2 ** n}×",
+            industry=industry,
+            capacity=base_capacity * (2 ** n),
+            workers=0 if power_base > 0 else base_workers + n,
+            capital_good=good,
+            capital_cost=cost,
+            build_months=base_build_months + n // 2,
+            power=power_base * (2 ** n) if power_base > 0 else 0.0,
+            building_cost=0.0,
+        )
+    return result
+
+
+EQUIPMENT: Dict[str, EquipmentType] = {}
+EQUIPMENT.update(
+    _make_equipment_tiers(
+        "farm", Industry.AGRICULTURE, "农机",
+        base_capacity=0.0, base_workers=0, capital_good=Good.MACHINERY,
+        t0_cost=1.0, upgrade_cost=2.0, base_build_months=2, power_base=1.0,
+    )
+)
+for prefix, industry, label, capacity, workers, good, t0, upgrade, build in [
+    ("coal", Industry.COAL_MINE, "手工矿井", 10.0, 10, Good.MACHINERY, 0.0, 2.0, 0),
+    ("iron", Industry.IRON_MINE, "手工矿井", 10.0, 10, Good.MACHINERY, 0.0, 2.0, 0),
+    ("steel", Industry.STEEL_MILL, "炼钢炉", 50.0, 3, Good.BRICK, 1000.0, 2000.0, 2),
+    ("brick", Industry.BRICK_FACTORY, "砖窑", 100.0, 50, Good.BRICK, 300.0, 600.0, 2),
+    ("textile", Industry.TEXTILE_MILL, "织机", 50.0, 1, Good.MACHINERY, 0.0, 5.0, 1),
+    ("machinery", Industry.MACHINERY_FACTORY, "机械工坊", 5.0, 10, Good.STEEL, 0.0, 20.0, 1),
+    ("construction", Industry.CONSTRUCTION, "施工队", 50.0, 20, Good.MACHINERY, 0.0, 3.0, 1),
+    ("fertilizer", Industry.FERTILIZER_FACTORY, "反应炉", 20.0, 5, Good.MACHINERY, 1.0, 2.0, 2),
+]:
+    EQUIPMENT.update(
+        _make_equipment_tiers(
+            prefix, industry, label,
+            base_capacity=capacity, base_workers=workers,
+            capital_good=good, t0_cost=t0, upgrade_cost=upgrade,
+            base_build_months=build,
+        )
+    )
+
 
 SECTOR_PARAMS: Dict[Industry, SectorParams] = {
     Industry.AGRICULTURE: SectorParams(
         industry=Industry.AGRICULTURE,
         output=Good.FOOD,
         inputs={},
-        equipment=("farm_machinery",),
+        equipment=tuple(f"farm_t{n}" for n in range(8)),
         max_firms=300,
         is_resource=True,
     ),
@@ -300,7 +204,7 @@ SECTOR_PARAMS: Dict[Industry, SectorParams] = {
         industry=Industry.COAL_MINE,
         output=Good.COAL,
         inputs={},
-        equipment=("hand_mine", "mechanized_mine"),
+        equipment=tuple(f"coal_t{n}" for n in range(8)),
         max_firms=30,
         is_resource=True,
     ),
@@ -308,7 +212,7 @@ SECTOR_PARAMS: Dict[Industry, SectorParams] = {
         industry=Industry.IRON_MINE,
         output=Good.IRON_ORE,
         inputs={},
-        equipment=("hand_mine", "mechanized_mine"),
+        equipment=tuple(f"iron_t{n}" for n in range(8)),
         max_firms=15,
         is_resource=True,
     ),
@@ -316,42 +220,42 @@ SECTOR_PARAMS: Dict[Industry, SectorParams] = {
         industry=Industry.STEEL_MILL,
         output=Good.STEEL,
         inputs={Good.IRON_ORE: 1.5, Good.COAL: 1.0},
-        equipment=("furnace_20", "furnace_40", "furnace_80"),
+        equipment=tuple(f"steel_t{n}" for n in range(8)),
         max_firms=8,
     ),
     Industry.BRICK_FACTORY: SectorParams(
         industry=Industry.BRICK_FACTORY,
         output=Good.BRICK,
         inputs={Good.COAL: 0.2},
-        equipment=("brick_kiln", "brick_kiln_large"),
+        equipment=tuple(f"brick_t{n}" for n in range(8)),
         max_firms=5,
     ),
     Industry.TEXTILE_MILL: SectorParams(
         industry=Industry.TEXTILE_MILL,
         output=Good.CLOTH,
         inputs={Good.FOOD: 0.001},
-        equipment=("hand_loom", "industrial_loom"),
+        equipment=tuple(f"textile_t{n}" for n in range(8)),
         max_firms=6,
     ),
     Industry.MACHINERY_FACTORY: SectorParams(
         industry=Industry.MACHINERY_FACTORY,
         output=Good.MACHINERY,
         inputs={Good.STEEL: 1.0},
-        equipment=("hand_forge", "machine_tool"),
+        equipment=tuple(f"machinery_t{n}" for n in range(8)),
         max_firms=4,
     ),
     Industry.CONSTRUCTION: SectorParams(
         industry=Industry.CONSTRUCTION,
         output=Good.BUILDING,
         inputs={Good.BRICK: 0.5},
-        equipment=("hand_crew", "construction_machinery"),
+        equipment=tuple(f"construction_t{n}" for n in range(8)),
         max_firms=6,
     ),
     Industry.FERTILIZER_FACTORY: SectorParams(
         industry=Industry.FERTILIZER_FACTORY,
         output=Good.FERTILIZER,
         inputs={Good.COAL: 2.0},
-        equipment=("reactor",),
+        equipment=tuple(f"fertilizer_t{n}" for n in range(8)),
         max_firms=3,
     ),
 }

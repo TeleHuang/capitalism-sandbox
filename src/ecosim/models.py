@@ -135,9 +135,9 @@ class Capitalist:
     id: str
     cash: float
     role: str = "director"
-    food: float = 0.5
-    cloth: float = 10.0
-    housing: float = 2.0
+    food: float = 0.15
+    cloth: float = 1.5
+    housing: float = 0.3
     consumed_food: float = 0.0
     consumed_cloth: float = 0.0
     consumed_housing: float = 0.0
