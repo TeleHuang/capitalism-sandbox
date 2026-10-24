@@ -26,7 +26,8 @@
 | `feature/ui-cockpit` | `d8cdae7` | 已合并 | 本地 API 驾驶舱（Python http.server + HTML/JS） |
 | `feature/ui-comparison` | — | 暂停 | 第二套 UI 方案；worktree 保留 |
 | `feature/services` | `79d27de` | 已合并 | 服务业/非正规自雇，古典失业 43%→9.3% |
-| `feature/l2` | `62f3217` | 暂停 | markup/LES 诊断脚本 WIP |
+| `feature/l2` | `62f3217` | 暂停 | 自由 markup/LES 诊断脚本 WIP |
+| `feature/l2-soft` | 进行中 | 进行中 | 参考价锚定的软 markup（成本加成 + ±15% 走廊） |
 | `feature/fertilizer` | `61fae0e` | 已合并 | 化肥周转资金/招聘优先/2 台上限（主线 `f3d4248`） |
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
 
