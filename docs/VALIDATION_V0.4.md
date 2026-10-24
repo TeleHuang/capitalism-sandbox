@@ -4,6 +4,11 @@
 > 工作分支：`feature/validation`
 > 交付：`scripts/validate_v04.py`、`tests/test_invariants.py`、本文件，
 > 以及 `artifacts/validation/` 下的 JSON/CSV/Markdown 产物。
+>
+> **V0.4.1 更新（2026-10-25）**：本报告的冲击数值是在**无服务业**的
+> `feature/validation` 分支上生成的。主线随后合并了服务业/非正规自雇与
+> 驾驶舱：240 月古典失业从 43.3% 降到约 9.3%，Keynesian 从 16.9% 降到约 1.8%，
+> 测试增至 50 个。冲击的方向性结论仍可参考，但绝对数值需在合并后的主线重跑。
 
 ## 0. 结论摘要
 
