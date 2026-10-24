@@ -90,3 +90,27 @@ plan = desired_output / effective_capacity
 负利润率主要是**模型单位错配 + 自雇会计 + 利润率口径**问题，不是经济规律。
 修复后资本主义部门利润率已转正/接近零。下一步应处理库存消化、建筑需求和
 底层流动性，而不是继续调价格或“接受负利润”。
+
+## 7. 外部参考（用于校准方向，不是逐条复现）
+
+- Richters (2015), *Markup pricing and the rate of profit in an agent-based
+  Sraffian model*：部门成本加成、利润率上限与库存振荡；支持“markup +
+  库存调整”而不是固定价格带。
+  <https://www.boeckler.de/pdf/v_2015_10_23_richters.pdf>
+- Delli Gatti 风格 ABM（ANPEC 2015）：异质企业、markup、杠杆/银行风险溢价、
+  破产；说明利润与库存/信用必须联合建模。
+  <https://www.anpec.org.br/encontro/2015/submissao/files_I/i4-1089df3c4a64ef9c699ea9616550a3af.pdf>
+- CEPREMAP 库存-价格模型：库存偏离目标时调整产出/价格，利润引导资本配置。
+  <https://www.cepremap.fr/depot/couv_orange/co8416.pdf>
+- 企业库存累积的 NetLogo ABM 博士论文：企业按库存优化产量、随机 markup
+  1.1–1.5；支持“库存目标 + markup”而非无限累库。
+  <https://hss-opus.ub.rub.de/opus4/frontdoor/deliver/index/docId/8403/file/diss.pdf>
+- SFC 信用危机模型（2026）：折旧作为真实流量、利润分为分红/留存、银行利润
+  显式进入部门平衡；支持把银行利润/折旧口径写清楚。
+  <https://www.aimsciences.org/article/doi/10.3934/fmf.2026.100089>
+- Diewert 资本/折旧核算：净利润应扣除折旧，用户成本 = (r+δ)P；支持“净利润率”
+  与“毛利润率”分开报告。
+  <https://econ.sites.olt.ubc.ca/files/2013/06/pdf_paper_erwin-diewert-measuring-contributions-productivity.pdf>
+
+这些来源的共同点：成功 ABM 不会让价格长期低于成本、也不会让库存无限累积；
+利润/折旧/银行/库存必须有显式会计。我们的修复方向与之一致。
