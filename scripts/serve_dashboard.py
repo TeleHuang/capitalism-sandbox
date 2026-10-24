@@ -71,6 +71,7 @@ INDUSTRY_LABELS = {
     "machinery_factory": "机械",
     "construction": "建筑",
     "fertilizer_factory": "化肥",
+    "service": "服务",
 }
 
 SCALAR_FIELDS = (
