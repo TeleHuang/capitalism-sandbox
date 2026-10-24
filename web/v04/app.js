@@ -721,7 +721,7 @@
         spark: "gdp"
       }),
       kpiCard({
-        label: "利润率", tag: "利润", color: "var(--series-4)",
+        label: "资本主义利润率", tag: "利润", color: "var(--series-4)",
         value: fmtPct(profitRate, 2), exact: fmtPct(profitRate, 4), unit: "",
         sub: "月度经济利润 <b>" + fmtSigned(profit, "money") + "</b> 元",
         delta: previous == null ? "起始月" : deltaText(profitRate, scalarAt("profit_rate", previous), "pp"),
@@ -772,7 +772,7 @@
     gdp: { label: "GDP", unit: "元 / 月", color: "var(--series-1)", format: "money", includeZero: true },
     investment: { label: "投资", unit: "元 / 月", color: "var(--series-2)", format: "money", includeZero: true },
     unemployment_rate: { label: "失业率", unit: "%", color: "var(--series-3)", format: "rate", includeZero: true },
-    profit_rate: { label: "利润率", unit: "%", color: "var(--series-4)", format: "rate", includeZero: true }
+    profit_rate: { label: "资本主义利润率", unit: "%", color: "var(--series-4)", format: "rate", includeZero: true }
   };
   var MULTI_META = {
     government_debt: { label: "政府债务", color: "var(--series-1)", format: "money" },
@@ -1507,7 +1507,7 @@
         '</tr>';
     }).join("");
     return '<div class="table-wrap"><table class="compare-table">' +
-      '<thead><tr><th>制度</th><th>存活</th><th>失业率</th><th>GDP</th><th>投资</th><th>利润率</th><th>政府债务</th><th>央行货币</th><th>就业保障</th><th>粮食储备</th></tr></thead>' +
+      '<thead><tr><th>制度</th><th>存活</th><th>失业率</th><th>GDP</th><th>投资</th><th>资本主义利润率</th><th>政府债务</th><th>央行货币</th><th>就业保障</th><th>粮食储备</th></tr></thead>' +
       '<tbody>' + rows + '</tbody></table></div>' +
       '<p class="table-foot">来自轻量对比接口 <code>/api/compare</code>，与当前时间轴同步；点击行可切换到该制度（未载入时首次会运行引擎）。</p>';
   }
