@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 def equipment_summary(enterprise: Enterprise) -> tuple[float, int, int]:
-    """Return (capacity at skill 1, required workers, equipment units)."""
+    """返回（熟练度 1 时的产能、所需工人、设备数量）。"""
     capacity = 0.0
     workers = 0
     units = 0
@@ -37,7 +37,7 @@ def equipment_summary(enterprise: Enterprise) -> tuple[float, int, int]:
 
 
 def farm_requirements(enterprise: Enterprise) -> tuple[int, float]:
-    """Return (required workers, machinery power) for a farm."""
+    """返回农场所需工人和农机动力。"""
     power = 0.0
     for key, count in enterprise.equipment.items():
         if count <= 0:
@@ -79,11 +79,10 @@ def average_wage(workers: list[Worker]) -> float:
 
 
 def produce(engine: "Engine", enterprise: Enterprise) -> float:
-    """Run one month of production for an enterprise.
+    """执行企业一个月的生产。
 
-    Output is capacity times labour utilisation times average skill.  Inputs are
-    a hard constraint: if an input is missing, output is scaled down to what the
-    available input can support.  Fertilizer is a yield multiplier for farms.
+    产出 = 产能 × 劳动利用率 × 平均熟练度。投入是硬约束：缺少投入时，
+    产出会缩减到现有投入能支撑的水平。化肥是农场的亩产乘数。
     """
     workers = [engine.workers[w] for w in enterprise.workers if engine.workers[w].alive]
     if not workers:
@@ -198,11 +197,11 @@ def unit_cost(
     workers: list[Worker],
     land_price: float = 0.0,
 ) -> float:
-    """Average cost for pricing.
+    """用于定价的平均成本。
 
-    Land is deliberately excluded from depreciation: it is an asset, not a
-    depreciating machine.  Including it made food cost ~142 yuan/tonne while the
-    market price was 100, freezing the food market and causing a famine.
+    土地刻意不计折旧：它是资产，不是会折旧的机器。把土地计入折旧曾让
+    粮食成本被算成约 142 元/吨，而市场价只有 100 元/吨，导致食品市场
+    冻结并引发饥荒。
     """
     output = enterprise.last_output
     if output <= 1e-9:
@@ -264,10 +263,10 @@ def representative_roi(
     wage: float,
     land_price: float,
 ) -> float:
-    """Expected monthly return on capital for one new unit (or one standard farm).
+    """一台新设备（或一个标准农场）的预期月资本回报率。
 
-    Uses mature skill (2.0) and current prices.  This is deliberately a simple
-    myopic ROI; it is the signal that lets capital flow into agriculture.
+    使用成熟熟练度（2.0）和当前价格。这是一个刻意简化的短视 ROI；
+    正是这个信号让资本流入农业。
     """
     et = EQUIPMENT[equipment_key]
     params = SECTOR_PARAMS[industry]

@@ -13,14 +13,13 @@ from .production import equipment_summary
 
 
 def build_scenario_1(engine: Engine) -> Engine:
-    """First Industrial Revolution / agricultural-industrialisation scenario.
+    """第一次工业革命 / 农业国工业化场景。
 
-    The aggregate targets follow the PRD's scenario 1: 600 smallholders, 500
-    industrial workers, 100 capitalists, a tight food balance, and an initially
-    unmechanised agricultural sector.  The equipment catalogue is calibrated so
-    the initial industrial output is close to the PRD's narrative totals.
+    总量目标遵循 PRD 场景 1：600 名自耕农、500 名工业工人、100 名资产阶级、
+    粮食紧平衡、农业初始未机械化。设备目录经过校准，使初始工业产出
+    接近 PRD 的叙事总量。
     """
-    # --- Capitalists -------------------------------------------------
+    # --- 资产阶级 -------------------------------------------------
     for i in range(50):
         engine.capitalists[f"C_{i}"] = _capitalist(f"C_{i}", 100_000.0, "director")
     for i in range(50, 100):
@@ -29,7 +28,7 @@ def build_scenario_1(engine: Engine) -> Engine:
     owner_ids = [c.id for c in engine.capitalists.values()]
     owner_cursor = 0
 
-    # --- Smallholder agriculture ------------------------------------
+    # --- 自耕农农业 ------------------------------------------------
     for _ in range(600):
         worker = engine.create_worker(
             industry=Industry.AGRICULTURE,
@@ -53,7 +52,7 @@ def build_scenario_1(engine: Engine) -> Engine:
         engine.land.owners[worker.id] = 10.0
         engine.land.enterprise_by_owner[worker.id] = enterprise.id
 
-    # --- Industrial enterprises -------------------------------------
+    # --- 工业企业 --------------------------------------------------
     def add_industry(
         industry: Industry,
         enterprise_count: int,
@@ -94,8 +93,8 @@ def build_scenario_1(engine: Engine) -> Engine:
     add_industry(Industry.TEXTILE_MILL, 1, 20, {"hand_loom": 20})
     add_industry(Industry.MACHINERY_FACTORY, 1, 10, {"hand_forge": 1})
     add_industry(Industry.CONSTRUCTION, 5, 20, {"hand_crew": 1})
-    # Fertilizer starts empty; it is an entry opportunity once food/coal prices
-    # make a reactor profitable.
+    # 化肥 starts empty; it is an entry opportunity once food/coal prices
+    # 它会成为一个进入机会。
 
     engine.land.total_land = TOTAL_LAND_MU
     engine.market.reference_prices = dict(INITIAL_PRICES)
@@ -110,7 +109,7 @@ def _capitalist(cid: str, cash: float, role: str):
 
 
 def _seed_inputs(engine: Engine, enterprise) -> None:
-    """Give each enterprise one month of inputs at current capacity and skill 2."""
+    """按当前产能和熟练度 2 给每家企业配置一个月投入。"""
     params = SECTOR_PARAMS[enterprise.industry]
     if not params.inputs:
         return

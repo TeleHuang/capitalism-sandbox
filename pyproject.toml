@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capitalism-sandbox"
-version = "0.2.0"
-description = "An agent-based sandbox for a closed capitalist economy"
+version = "0.2.1"
+description = "封闭资本主义经济的多智能体沙盒"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "TeleHuang" }]

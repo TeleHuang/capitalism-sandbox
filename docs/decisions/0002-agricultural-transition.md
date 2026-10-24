@@ -1,25 +1,22 @@
-# ADR 0002 — Agricultural transition through a land market
+# ADR 0002 — 通过土地市场实现农业转型
 
-- Status: accepted (provisional)
-- Date: 2026-10-24
-- Context: The previous prototype had 600 self-employed farmers and a tight food
-  balance. Industrial goods were produced, but no one founded agricultural enterprises
-  or bought farm machinery/fertilizer, so agricultural labour productivity stayed flat.
-- Decision:
-  1. Land is a fixed 6000-mu asset owned by 600 smallholders (10 mu each).
-  2. Smallholders sell whole plots when the land price exceeds their reservation price.
-  3. Capitalist farms buy land, hire workers, buy machinery and fertilizer when
-     expected ROI exceeds the investment hurdle.
-  4. Farm machinery raises land per worker; fertilizer doubles yield per mu.
-  5. A sold-out smallholder becomes a landless worker; the buyer's farm can hire them.
-- Why: The missing link was not a parameter but a missing market and a missing
-  investor. Without land, entry and an input market, agricultural productivity cannot
-  respond to food prices.
-- Alternatives considered:
-  - state-led agricultural investment (rejected for V0.2: no government sector yet);
-  - smallholder cooperatives (deferred: needs credit institutions);
-  - exogenous productivity growth (rejected: would hide the missing mechanism).
-- Consequences:
-  - land price and land distribution become observable metrics;
-  - the transition is gradual and can produce land-price cycles;
-  - the model now needs a proper land/asset valuation in the balance sheet (next step).
+- 状态：已接受（临时）
+- 日期：2026-10-24
+- 背景：上一版有 600 个自耕农和紧平衡的粮食供给。工业品在产出，但没有人建立农业企业、
+  购买农机或化肥，农业劳动生产率一直不动。
+- 决定：
+  1. 土地是固定的 6000 亩资产，由 600 个自耕农持有（每人 10 亩）。
+  2. 当地价高于保留价时，自耕农出售整块土地。
+  3. 资本主义农场在预期资本回报率 超过投资门槛时买地、雇工、购买农机和化肥。
+  4. 农机提高人均土地；化肥使每亩产量翻倍。
+  5. 卖光土地的自耕农变成无地工人，可被买方的农场或工业雇佣。
+- 理由：缺失的不是参数，而是市场与投资者。没有土地、进入机制和投入品市场，
+  农业不可能对食品价格作出反应。
+- 考虑过的替代方案：
+  - 国家主导的农业投资（V0.2 暂不采用：还没有政府部门）；
+  - 自耕农合作社（推迟：需要信用制度）；
+  - 外生农业技术进步（拒绝：会掩盖缺失的机制）。
+- 后果：
+  - 地价和土地分布成为可观测指标；
+  - 转型是渐进的，可能出现地价周期；
+  - 下一步需要把土地/资产估值纳入完整资产负债表。

@@ -45,7 +45,7 @@ from .decisions import (
     wants_fertilizer,
     wage_floor,
 )
-from .enums import Good, Industry
+from .enums import GOOD_LABELS, Good, Industry
 from .land import run_land_market
 from .market import Market
 from .models import (
@@ -90,7 +90,7 @@ class Engine:
         self._warnings: List[str] = []
 
     # ------------------------------------------------------------------
-    # Identity / lookup helpers
+    # 身份 / 查询辅助
     # ------------------------------------------------------------------
     def new_worker_id(self) -> str:
         self._next_worker += 1
@@ -139,7 +139,7 @@ class Engine:
         )
 
     # ------------------------------------------------------------------
-    # Factory helpers
+    # 工厂辅助方法
     # ------------------------------------------------------------------
     def create_worker(
         self,
@@ -182,9 +182,9 @@ class Engine:
     def create_agricultural_enterprise(
         self, capitalist: Capitalist, land_mu: float, price: float
     ) -> Enterprise:
-        # Working capital injection from the owner.  A capitalist farm needs
-        # enough cash to buy its remaining land plots and machinery; 5k was too
-        # little and produced 40-mu micro-farms.
+        # 所有者注入的周转资金。资本主义农场需要足够现金
+        # 来购买剩余土地和农机；5000 太少，会制造 40 亩的微型农场。
+
         injection = min(capitalist.cash * 0.5, 20_000.0)
         capitalist.cash -= injection
         enterprise = self.create_enterprise(
@@ -246,7 +246,7 @@ class Engine:
         return True
 
     # ------------------------------------------------------------------
-    # Main loop
+    # 主循环
     # ------------------------------------------------------------------
     def step(self) -> dict:
         self.tick += 1
@@ -285,7 +285,7 @@ class Engine:
         return stat
 
     # ------------------------------------------------------------------
-    # Labour market
+    # 劳动市场
     # ------------------------------------------------------------------
     def _update_skills(self) -> None:
         for worker in self.workers.values():
@@ -315,7 +315,7 @@ class Engine:
                 target = max(1, target)
 
             if len(workers) > target:
-                # Keep the owner-operator and the most skilled workers.
+                # 保留自耕农所有者和熟练度最高的工人。
                 removable = [
                     w
                     for w in sorted(workers, key=lambda w: (w.is_owner_operator, w.skill))
@@ -330,14 +330,14 @@ class Engine:
 
             offer = enterprise_wage_offer(self, enterprise)
             offers[enterprise.id] = offer
-            # Existing employees are paid the enterprise's current offer.
+            # 现有员工按企业当前工资报价支付。
             for worker in workers:
                 worker.wage = offer
                 worker.hours = worker.choose_hours(prices)
                 worker.industry = enterprise.industry
             vacancies[enterprise.id] = max(0, target - len(workers))
 
-        # Hire the unemployed first, then allow limited poaching.
+        # 先雇佣失业者，再允许有限度的跳槽。
         unemployed = [
             w
             for w in self.workers.values()
@@ -363,7 +363,7 @@ class Engine:
                 remaining -= 1
             vacancies[enterprise_id] = remaining
 
-        # Limited poaching: workers compare their wage with the best vacancy.
+        # 有限跳槽：工人把自己的工资与最好的空缺报价比较。
         hiring = sorted(
             [e for e in vacancies if vacancies[e] > 0],
             key=lambda eid: offers[eid],
@@ -412,10 +412,10 @@ class Engine:
             enterprise.workers.append(worker.id)
 
     # ------------------------------------------------------------------
-    # Wages / production
+    # 工资 / 生产
     # ------------------------------------------------------------------
     def _update_price_bands(self) -> None:
-        """Keep thin markets within a replacement-cost band."""
+        """把薄市场的价格限制在重置成本带内。"""
         prices = self.market.reference_prices
         by_good: Dict[Good, List[float]] = {g: [] for g in Good}
         for enterprise in self.active_enterprises():
@@ -431,9 +431,9 @@ class Engine:
             median = costs[len(costs) // 2]
             initial = INITIAL_PRICES[good]
             self.market.ceilings[good] = max(median * 2.5, initial * 1.5)
-            # Do not let a surplus push prices below replacement cost; that
-            # produced a deflationary trap in which farms could not afford
-            # fertilizer and machinery investment stopped.
+            # 不要让过剩把价格压到重置成本以下；那会形成
+            # 通货紧缩陷阱：农场买不起化肥，农机投资也会停止。
+
             self.market.floors[good] = max(median * 0.90, initial * 0.60)
 
     def _pay_wages(self) -> None:
@@ -442,9 +442,9 @@ class Engine:
             bill = sum(w.wage * w.effective_labor for w in workers)
             if bill <= 1e-9:
                 continue
-            # Owners fund wages before the bank does.  Without this, a
-            # liquidity squeeze at the enterprise level shows up as wage
-            # arrears and a famine even though the owners are sitting on cash.
+            # 所有者先于银行垫付工资。否则企业层面的流动性
+            # 紧缩会表现为工资拖欠和饥荒，尽管所有者账上
+            # 其实有现金。
             if enterprise.cash < bill:
                 owner = self.capitalists.get(enterprise.owner_id)
                 if owner is None:
@@ -473,13 +473,13 @@ class Engine:
             self.production_month[out_good] += output
 
     # ------------------------------------------------------------------
-    # Investment / entry
+    # 投资 / 进入
     # ------------------------------------------------------------------
     def _investment_decisions(self) -> None:
         started = 0
 
-        # 1) Existing capitalist farms.  Two slots are reserved so the
-        # agricultural transition is not crowded out by coal/iron projects.
+        # 1）现有资本主义农场。预留两个名额，避免农业转型
+        # 被煤/铁项目挤掉。
         farms = [
             e
             for e in self.active_enterprises(Industry.AGRICULTURE)
@@ -498,9 +498,9 @@ class Engine:
                 started += 1
                 farms_started += 1
 
-        # 2) One new entrant.  Fertilizer is prioritised while the sector is
-        # empty: without a fertilizer producer, farms cannot adopt the input
-        # that makes the agricultural productivity jump possible.
+        # 2）一个新进入者。化肥行业为空时优先进入化肥：
+        # 没有化肥厂，农场就无法采用这种让农业
+        # 劳动生产率跃升的投入品。
         entry_candidates = []
         for industry in Industry:
             if industry == Industry.AGRICULTURE:
@@ -548,7 +548,7 @@ class Engine:
                         owner.cash += enterprise.cash
                         enterprise.cash = 0.0
 
-        # 3) Existing non-agricultural enterprises, with bottlenecks first.
+        # 3）现有非农企业，优先处理瓶颈行业。
         priority = {
             Industry.MACHINERY_FACTORY: 0,
             Industry.STEEL_MILL: 1,
@@ -576,7 +576,7 @@ class Engine:
                 started += 1
 
     # ------------------------------------------------------------------
-    # Orders
+    # 挂单
     # ------------------------------------------------------------------
     def _submit_sell_orders(self) -> None:
         for enterprise in self.active_enterprises():
@@ -686,9 +686,9 @@ class Engine:
         for project in self.projects.values():
             if not project.active:
                 continue
-            # Top up a project that is close to completion but has run out of
-            # cash because capital-goods prices rose.  Without this, a project
-            # can sit at 9.9/10 machinery forever and block an investment slot.
+            # 给接近完成但现金耗尽的项目的追加资金：
+            # 资本品涨价会让项目停在 9.9/10 台设备，
+            # 永远占住一个投资名额。
             enterprise = self.enterprises.get(project.enterprise_id)
             if enterprise and enterprise.active:
                 workers = self.enterprise_workers(enterprise)
@@ -719,7 +719,7 @@ class Engine:
                     self.market.submit_buy(project, good, qty, bid)
 
     # ------------------------------------------------------------------
-    # Project completion
+    # 项目完成
     # ------------------------------------------------------------------
     def _progress_projects(self) -> None:
         for project in list(self.projects.values()):
@@ -748,7 +748,7 @@ class Engine:
             enterprise.cash += project.cash
             project.cash = 0.0
         else:
-            # Orphan project: refund to the bank so money is not destroyed.
+            # 孤儿项目：退款给银行，避免货币被销毁。
             self.bank.cash += project.cash
             project.cash = 0.0
         project.active = False
@@ -765,7 +765,7 @@ class Engine:
         project.active = False
 
     # ------------------------------------------------------------------
-    # Finance / dividends / bankruptcy
+    # 金融 / 分红 / 破产
     # ------------------------------------------------------------------
     def _finance(self) -> None:
         prices = self.market.reference_prices
@@ -807,8 +807,8 @@ class Engine:
                         if owner_worker and owner_worker.alive:
                             owner_worker.cash += dividend
                         else:
-                            # A dead owner cannot receive dividends; park the
-                            # cash in the bank so the money audit stays exact.
+                            # 已死亡的所有者不能收分红；把现金
+                            # 放进银行，保证货币审计精确。
                             self.bank.cash += dividend
                     else:
                         owner.cash += dividend
@@ -834,7 +834,7 @@ class Engine:
             enterprise.cash = 0.0
 
     # ------------------------------------------------------------------
-    # Consumption / demographics
+    # 消费 / 人口
     # ------------------------------------------------------------------
     def _consume_and_demographics(self) -> None:
         for worker in self.workers.values():
@@ -895,7 +895,7 @@ class Engine:
             capitalist.housing -= capitalist.consumed_housing
 
     # ------------------------------------------------------------------
-    # Metrics
+    # 统计指标
     # ------------------------------------------------------------------
     def _record_stats(self) -> dict:
         prices = self.market.reference_prices
@@ -954,23 +954,23 @@ class Engine:
         money_total = self.total_money()
         if self.money_initial > 0 and abs(money_total - self.money_initial) > 0.01:
             self._warnings.append(
-                f"money drift: {money_total:.2f} != {self.money_initial:.2f}"
+                f"货币漂移：{money_total:.2f} != {self.money_initial:.2f}"
             )
 
         for good in Good:
             price = prices[good]
             initial = INITIAL_PRICES[good]
             if price > initial * 10:
-                self._warnings.append(f"{good.value} price > 10x initial")
+                self._warnings.append(f"{GOOD_LABELS[good]} 价格高于初始价的 10 倍")
             if price < initial * 0.1:
-                self._warnings.append(f"{good.value} price < 0.1x initial")
+                self._warnings.append(f"{GOOD_LABELS[good]} 价格低于初始价的 0.1 倍")
             output = self.production_month.get(good, 0.0)
             if output <= 1e-9:
                 self._zero_output_streak[good.value] += 1
             else:
                 self._zero_output_streak[good.value] = 0
             if self._zero_output_streak[good.value] == 3:
-                self._warnings.append(f"{good.value} zero output for 3 months")
+                self._warnings.append(f"{GOOD_LABELS[good]} 连续 3 个月产量为 0")
 
         gdp = self.market.consumption_spending + self.market.investment_spending
         stat = {

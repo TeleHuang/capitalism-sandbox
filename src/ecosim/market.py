@@ -27,12 +27,12 @@ class Transaction:
 
 
 class Market:
-    """A double auction with a reference-price tatonnement.
+    """带参考价试探过程的双边拍卖。
 
-    Orders are matched highest-bid / lowest-ask at the average price.  If the
-    book is crossed but not overlapping there is no trade, and the reference
-    price moves next month according to excess demand.  This is the key
-    difference from V0.1, where a non-crossing book froze the price forever.
+    订单按“最高买价 / 最低卖价”撮合，成交价取双方报价平均值。
+    如果订单簿有交叉意愿但没有重叠价格，则不成交；下个月参考价按
+    超额需求调整。这与 V0.1 的关键区别是：V0.1 在买卖价不重叠时
+    会把价格永久冻结。
     """
 
     def __init__(self, prices: Dict[Good, float]):
@@ -52,14 +52,14 @@ class Market:
         }
         self.consumption_spending = 0.0
         self.investment_spending = 0.0
-        # Cost-based guard rails, updated by the engine.  They are not a
-        # substitute for competition; they stop a thin market from ratcheting
-        # to 10x replacement cost (or collapsing to 5% of it).
+        # 基于成本的安全轨，由引擎更新。它们不能替代竞争，但可以
+        # 防止薄市场把价格推到重置成本的数倍，或砸到成本的零头。
+
         self.ceilings: Dict[Good, float] = {}
         self.floors: Dict[Good, float] = {}
 
     # ------------------------------------------------------------------
-    # Order submission
+    # 挂单
     # ------------------------------------------------------------------
     def submit_buy(self, agent: Any, good: Good, quantity: float, price: float) -> None:
         if quantity > 1e-9 and price > 0:
@@ -75,7 +75,7 @@ class Market:
             self.orders_sell[g].clear()
 
     # ------------------------------------------------------------------
-    # Matching
+    # 撮合
     # ------------------------------------------------------------------
     def match(self) -> List[Transaction]:
         transactions: List[Transaction] = []
@@ -98,12 +98,12 @@ class Market:
                 deal_price = (b.price + s.price) / 2.0
                 deal_volume = min(b.quantity, s.quantity)
 
-                # Buyer budget constraint: never overdraft.
+                # 买方预算约束：绝不允许透支。
                 buyer_cash = max(getattr(b.agent, "cash", 0.0), 0.0)
                 if buyer_cash < deal_price * deal_volume:
                     deal_volume = buyer_cash / deal_price if deal_price > 0 else 0.0
 
-                # Seller inventory constraint (defensive; one order per seller).
+                # 卖方库存约束（防御性；每个卖方只挂一张单）。
                 if isinstance(s.agent, Enterprise):
                     deal_volume = min(deal_volume, s.agent.inv(good))
 
@@ -179,7 +179,7 @@ class Market:
         imbalance = max(-1.0, min(1.0, imbalance))
         new *= 1.0 + PRICE_STEP * imbalance
 
-        # If one side is completely empty, make the signal a little stronger.
+        # 如果一侧完全为空，让价格信号略强一些。
         if demand > 1e-9 and supply <= 1e-9:
             new *= 1.0 + PRICE_STEP
         elif supply > 1e-9 and demand <= 1e-9:
@@ -194,7 +194,7 @@ class Market:
         self.reference_prices[good] = max(PRICE_FLOOR, new)
 
     # ------------------------------------------------------------------
-    # Goods delivery
+    # 商品交割
     # ------------------------------------------------------------------
     @staticmethod
     def _receive_good(agent: Any, good: Good, quantity: float) -> None:

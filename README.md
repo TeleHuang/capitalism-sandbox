@@ -1,101 +1,110 @@
-# Capitalism Sandbox
+# 资本主义经济模拟 / Capitalism Sandbox
 
-**资本主义经济模拟 / An agent-based sandbox of a closed capitalist economy.**
+一个封闭资本主义经济的月度步进、确定性多智能体沙盒：规则驱动的工人、追求利润的资本家、
+现货市场、劳动市场、土地市场，以及投资与企业进入过程。
 
-A deterministic, monthly-step simulation of a closed economy: rule-driven workers, profit-seeking
-capitalists, a spot market, a labour market, a land market, and an investment/entry process. The
-long-term goal is to use LLM agents for managers and directors; the current milestone is to make the
-rule-based economy structurally sound first.
+长期目标是用 LLM 扮演经理和董事；当前里程碑是先把规则驱动的经济内核做扎实。
 
-> Status: **V0.2.0 — refactored core, not yet feature-complete.** The engine runs, is deterministic
-> with a fixed seed, and has regression tests. LLM agents, contracts, futures orders, and the full
-> dashboard are intentionally deferred.
+> 状态：**V0.2.1 — 重构后的内核，尚未功能完整。**
+> 引擎可运行、固定随机种子可复现，并有回归测试。LLM 智能体、合同、期货订单和完整界面
+> 是刻意推迟的内容。
 
-## Quick start
+## 快速开始
 
 ```powershell
 python -m pip install -e .
 python -m ecosim --months 240 --seed 1
 ```
 
-Or without installing:
+不安装也可以直接运行：
 
 ```powershell
 $env:PYTHONPATH = "src"
 python -m ecosim --months 240 --seed 1
 ```
 
-Write a machine-readable run:
+输出机器可读的完整运行记录：
 
 ```powershell
 python -m ecosim --months 240 --seed 1 --json artifacts/run.json
 ```
 
-Run tests:
+运行测试：
 
 ```powershell
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
 
-## What is implemented in V0.2
+## V0.2 已实现
 
-- 240 monthly ticks, deterministic RNG, money-conservation audit.
-- 9 sectors: agriculture, coal, iron ore, steel, brick, textile, machinery, construction, fertilizer.
-- Enterprise-level production with an explicit equipment catalogue, labour requirements and input
-  coefficients.
-- Flexible reference-price tatonnement; orders are matched highest-bid/lowest-ask at the average
-  price. Cost-based guard rails keep a thin market from ratcheting to 10x replacement cost.
-- Labour market with actual wage payments, hiring/firing, voluntary hours (16/12/8), skill growth
-  and unemployment.
-- Capitalist entry and investment based on expected return on capital, with a construction lag.
-- **Land market and capitalist agriculture.** Land is scarce and owned by smallholders; farms can
-  buy land, hire workers, buy fertilizer and farm machinery. This is the mechanism that allows
-  agricultural labour productivity to rise instead of freezing at a subsistence equilibrium.
-- Bank liquidity loans, enterprise cash separated from owner cash, dividends, bankruptcy.
-- Metrics: GDP, investment, unemployment, aggregate profit rate, capital stock, agricultural
-  labour productivity, enterprise counts, living-standard distribution.
-- Architecture document kept in sync with the code: [`03_架构设计文档.md`](03_架构设计文档.md).
+- 240 个月度轮次；固定随机种子；货币总量守恒审计。
+- 9 个行业：农业、煤炭、铁矿、钢铁、砖、纺织、机械、施工、化肥。
+- 企业级生产：显式设备目录、劳动需求、投入系数和熟练度。
+- 参考价试探型双边拍卖：最高买价 / 最低卖价撮合，成交价取双方报价平均值；
+  成本价格带只作为薄市场的安全轨，不是硬价格管制。
+- 劳动市场：真实发薪、雇佣/解雇、16/12/8 小时自愿工时、熟练度成长和失业。
+- 资本主义企业进入与投资：按预期资本回报率决策，并带建设期。
+- 土地市场与资本主义农业：土地稀缺且由自耕农持有；农场可以买地、雇工、购买化肥和农机。
+  这是让农业劳动生产率不再冻结在糊口均衡的机制。
+- 银行工资周转贷；企业现金与所有者现金分离；分红；基于净资产的破产判断。
+- 指标：GDP、投资、失业率、全社会利润率、资本存量、农业劳动生产率、企业数量、
+  生活标准分布。
 
-## What is not implemented yet
+架构文档与代码保持一致：[[03_架构设计文档.md]]。
 
-- LLM manager/director agents and management hierarchy.
-- Contracts, futures/order production, multi-month input smoothing.
-- Full UI (the current entry point is a CLI).
-- Scenario 0 (iron age) and scenario 2 (late capitalism).
-- Multiple capital-good types; V0.2 uses one generic `MACHINERY` good plus `BRICK`/`STEEL` for
-  specific equipment.
+## 尚未实现
 
-## Repository layout
+- LLM 经理/董事智能体与管理层级。
+- 合同、期货/订单生产、跨月平滑采购。
+- 完整界面；当前入口是命令行。
+- 场景 0（铁器时代）和场景 2（晚期资本主义）。
+- 多种资本品；V0.2 使用一个通用 `MACHINERY` 商品，钢铁厂用 `BRICK`，机床用 `STEEL`。
+
+## 交付形态
+
+本项目采用**双实现**策略：
+
+- **Python 版**：逻辑验证、回归测试、参数校准的参考实现，也是当前仓库的主实现；
+- **HTML 版**：最终发行版，浏览器直接运行，不要求安装 Python。当前尚未实现，
+  技术路线与选项见 [[docs/decisions/0003-html-release.md]]。
+
+详细的需求冲突与待选项见 [[docs/REQUIREMENTS_REVIEW.md]]。
+
+## 仓库结构
 
 ```
 .
 ├─ 01_产品介绍文档.md
-├─ 02_需求定义文档.md          # owned by the human
-├─ 03_架构设计文档.md          # owned by the Code Bot, must match the code
+├─ 02_需求定义文档.md          # 由人维护
+├─ 03_架构设计文档.md          # 由 Code Bot 维护，必须与代码一致
 ├─ 04_开发日志文档.md
-├─ src/ecosim/                 # simulation package
-├─ tests/                      # deterministic regression tests
-└─ docs/
-   ├─ REQUIREMENTS_REVIEW.md   # conflicts / open questions / options for the human
-   └─ decisions/               # architecture decision records
+├─ src/ecosim/                 # Python 参考实现
+├─ tests/                      # 确定性回归测试
+├─ docs/
+│  ├─ REQUIREMENTS_REVIEW.md   # 需求冲突 / 待选项
+│  └─ decisions/               # 架构决策记录
+└─ web/                        # HTML 发行版（规划中）
 ```
 
-## Development workflow
+## 开发流程
 
-This repository follows a two-owner workflow:
+仓库遵循“人机分工”的流程：
 
-1. **Human owns the requirements document** (`02_需求定义文档.md`). The Code Bot does not silently
-   rewrite requirements.
-2. **Code Bot owns the architecture document and the code.** Architecture must specify the concrete
-   mechanisms that the requirements leave open, and must stay consistent with `src/ecosim/`.
-3. When a requirement is economically or historically implausible, or logically inconsistent, the
-   Code Bot records the conflict in [`docs/REQUIREMENTS_REVIEW.md`](docs/REQUIREMENTS_REVIEW.md)
-   and proposes several options. The human decides; only then is the requirement changed.
-4. A change is done only when code, tests, architecture document, and changelog agree.
+1. **人负责需求文档**（`02_需求定义文档.md`）。Code Bot 不会静默改写需求。
+2. **Code Bot 负责架构文档和代码**。架构必须写明需求没有展开的具体机制，并与
+   `src/ecosim/` 保持一致。
+3. 当需求在经济/史实上明显不合理，或存在逻辑漏洞时，Code Bot 在
+   [[docs/REQUIREMENTS_REVIEW.md]] 记录冲突，并给出 2–4 个选项；由人决定后，才修改需求。
+4. 代码、测试、架构文档、开发日志必须一起更新，才算完成。
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the detailed checklist.
+详细检查清单见 [[CONTRIBUTING.md]]。
 
-## License
+## 语言约定
 
-No license has been chosen yet. Until one is added, all rights are reserved by the author.
+所有产品文档、架构文档、代码注释、运行说明使用中文；代码标识符、协议名和第三方 API 名称
+可以保留英文。
+
+## 许可证
+
+尚未选择许可证。在添加许可证之前，保留所有权利。

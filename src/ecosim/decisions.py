@@ -78,9 +78,9 @@ def enterprise_ask_price(engine: "Engine", enterprise: "Enterprise") -> float:
     else:
         price = ref * 0.98
 
-    # Sellers can take a loss to clear perishable stock; refusing to sell below
-    # cost froze the food market in V0.1 and caused a famine.  The ask is also
-    # capped near the reference price so a bid can actually cross it.
+    # 卖方可以亏本清理易腐库存；拒绝低于成本出售
+    # 曾在 V0.1 冻结食品市场并引发饥荒。卖价也
+    # 被限制在参考价附近，保证买价能够穿价成交。
     if cost > 0:
         price = max(price, cost * 0.85)
     price = min(price, ref * 1.02)
@@ -89,9 +89,9 @@ def enterprise_ask_price(engine: "Engine", enterprise: "Enterprise") -> float:
 
 def production_plan(engine: "Engine", enterprise: "Enterprise") -> float:
     if enterprise.industry == Industry.AGRICULTURE:
-        # Land is the constraint; farms keep producing even when stocks are high
-        # because food is the subsistence good.  A floor of 0.4 avoids a
-        # self-inflicted famine when the market clears slowly.
+        # 土地是约束；即使库存偏高，农场也会继续生产，
+        # 因为食品是生存品。0.4 的产量下限可以避免
+        # 市场出清缓慢时自己制造饥荒。
         return 1.0 if enterprise.land > 0 and enterprise.workers else 0.0
 
     params = SECTOR_PARAMS[enterprise.industry]
@@ -191,7 +191,7 @@ def should_invest(engine: "Engine", enterprise: "Enterprise") -> Optional[tuple[
 
 
 def agricultural_entry_roi(engine: "Engine") -> tuple[str, float]:
-    """ROI of a new capitalist farm with one machinery unit."""
+    """一台农机的新资本主义农场的 ROI。"""
     return best_equipment_choice(engine, Industry.AGRICULTURE) or ("farm_machinery", -1.0)
 
 

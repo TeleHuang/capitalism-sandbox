@@ -28,7 +28,7 @@ class Worker:
     is_owner_operator: bool = False
     land_owned: float = 0.0
 
-    # Last month's realised consumption, used for living-standard classification.
+    # 上月实际消费，用于生活标准分类。
     consumed_food: float = 0.0
     consumed_cloth: float = 0.0
     consumed_housing: float = 0.0
@@ -43,11 +43,10 @@ class Worker:
         return self.employer_id is not None
 
     def choose_hours(self, prices: Dict[Good, float]) -> int:
-        """The PRD's labour-reproduction ladder, in a deliberately simple form.
+        """PRD 的劳动力再生产阶梯，这里做刻意简化。
 
-        Workers first secure savings; once they have a comfort cushion they
-        exchange income for leisure.  Prices are part of the reservation wage,
-        so expensive food keeps people at 16 hours.
+        工人先确保储蓄；有了一定缓冲后，会用收入交换闲暇。
+        价格是保留工资的一部分，因此食品昂贵时工人仍会保持 16 小时工作。
         """
         basket = (
             FOOD_PER_WORKER * prices[Good.FOOD]
@@ -58,7 +57,7 @@ class Worker:
             current = self.hours
         else:
             current = 16
-        # Hunger overrides leisure: a worker without food works full time.
+        # 饥饿优先于闲暇：没有食物的工人会全职工作。
         if self.food + 1e-9 < 0.10 or self.living_standard in ("survival", "subsistence"):
             return 16
         if self.cash >= 120.0 and current > 8:
@@ -90,7 +89,7 @@ class Enterprise:
     modernization_capable: bool = True
     smoothed_sales: float = 0.0
 
-    # Market / accounting state
+    # 市场 / 会计状态
     ask_prices: Dict[Good, float] = field(default_factory=dict)
     planned_output: float = 0.0
     use_fertilizer: bool = False
@@ -149,11 +148,10 @@ class Capitalist:
 
 @dataclass
 class InvestmentProject:
-    """A construction project that buys capital goods over several months.
+    """跨月采购资本品的建设项目。
 
-    Cash is moved out of the enterprise into the project when it is created.  The
-    project is a market participant in its own right, so money is conserved and a
-    project cannot over-spend.
+    项目创建时，现金从企业转移到项目；项目本身是独立的市场参与者，
+    因此货币守恒，且项目不会超支。
     """
 
     id: str
@@ -225,7 +223,7 @@ class Bank:
 class LandMarket:
     total_land: float
     price: float
-    owners: Dict[str, float] = field(default_factory=dict)       # worker_id -> mu
+    owners: Dict[str, float] = field(default_factory=dict)       # 工人 ID -> 亩数
     enterprise_by_owner: Dict[str, str] = field(default_factory=dict)
 
     @property

@@ -19,20 +19,19 @@ if TYPE_CHECKING:
 
 
 def run_land_market(engine: "Engine") -> None:
-    """Central land market.
+    """中央土地市场。
 
-    Capitalist farms bid for land; smallholders sell whole 10-mu plots when the
-    price is above their reservation price.  This is the mechanism that lets
-    agricultural enterprises appear and consolidate land.  Without it,
-    agriculture remains a subsistence sector and farm machinery has no buyer.
+    资本主义农场竞价买地；自耕农在地价高于保留价时出售整块 10 亩地。
+    这是让农业企业出现并整合土地的机制。没有它，农业会停留在糊口部门，
+    农机也没有买家。
     """
     land = engine.land
     if land.total_land <= 0:
         return
 
-    demand: list[tuple[object, float, bool]] = []  # (buyer, mu, is_new_entrant)
+    demand: list[tuple[object, float, bool]] = []  # （买方，亩数，是否新进入者）
 
-    # Existing capitalist farms expand.
+    # 现有资本主义农场扩张。
     for ent in engine.enterprises.values():
         if not ent.active or ent.industry != Industry.AGRICULTURE:
             continue
@@ -49,8 +48,8 @@ def run_land_market(engine: "Engine") -> None:
         if available >= want * land.price * 0.5:
             demand.append((ent, want, False))
 
-    # New entrants.  Limit the number per month so land demand is not a single
-    # coordinated shock.
+    # 新进入者。限制每月数量，避免土地需求一次性
+    # 形成协调冲击。
     ag_roi = agricultural_entry_roi(engine)[1]
     if ag_roi >= INVESTMENT_HURDLE:
         entrants = [
@@ -70,7 +69,7 @@ def run_land_market(engine: "Engine") -> None:
         land.price = max(20.0, land.price * (1.0 - 0.02))
         return
 
-    # Supply: smallholders sell whole plots, but only a fraction per month.
+    # 供给：自耕农整块出售，但每月只卖一小部分。
     supply = 0.0
     sellers: list[str] = []
     if land.price >= LAND_RESERVATION_PRICE:
@@ -88,7 +87,7 @@ def run_land_market(engine: "Engine") -> None:
     total_demand = sum(mu for _, mu, _ in demand)
     traded = min(total_demand, supply)
 
-    # Allocate land to buyers in order.
+    # 按顺序把土地分配给买方。
     remaining_supply = traded
     for buyer, want, is_new in demand:
         if remaining_supply <= 0:
@@ -98,7 +97,7 @@ def run_land_market(engine: "Engine") -> None:
             continue
         if mu <= 0:
             continue
-        # Pay the first sellers in order.  A seller is whole-plot only.
+        # 按顺序向最先的卖方付款。卖方只卖整块地。
         paid = 0.0
         while mu > 1e-9 and sellers:
             seller_id = sellers[0]
@@ -122,8 +121,8 @@ def run_land_market(engine: "Engine") -> None:
                 mu -= seller_mu
                 remaining_supply -= seller_mu
                 paid += seller_mu
-                # A new entrant gets one plot and then becomes an existing farm
-                # for future expansions.
+                # 新进入者先获得一块地，之后作为现有农场
+                # 继续扩张。
                 is_new = False
                 buyer = next(
                     e
@@ -157,7 +156,7 @@ def run_land_market(engine: "Engine") -> None:
 
 
 def _remove_smallholder(engine: "Engine", worker_id: str) -> None:
-    """Close a sold-out smallholding and turn the owner into a landless worker."""
+    """关闭已卖光的自耕农农场，把所有者变成无地工人。"""
     worker = engine.workers[worker_id]
     worker.land_owned = 0.0
     worker.is_owner_operator = False
@@ -168,7 +167,7 @@ def _remove_smallholder(engine: "Engine", worker_id: str) -> None:
     ent = engine.enterprises.get(ent_id)
     if not ent:
         return
-    # Household assets return to the owner; goods stay in the worker's pantry.
+    # 家庭资产归还所有者；粮食留在工人的存粮里。
     worker.cash += max(0.0, ent.cash)
     worker.food += max(0.0, ent.inv(SECTOR_PARAMS[ent.industry].output))
     ent.cash = 0.0

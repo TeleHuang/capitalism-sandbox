@@ -1,3 +1,3 @@
-"""Capitalism Sandbox simulation package."""
+"""资本主义经济模拟仿真包。"""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

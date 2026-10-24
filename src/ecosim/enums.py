@@ -29,3 +29,15 @@ class Industry(str, Enum):
 
 CONSUMER_GOODS = frozenset({Good.FOOD, Good.CLOTH, Good.BUILDING})
 CAPITAL_GOODS = frozenset({Good.MACHINERY, Good.BRICK, Good.STEEL})
+
+GOOD_LABELS = {
+    Good.FOOD: "粮食",
+    Good.COAL: "煤炭",
+    Good.IRON_ORE: "铁矿石",
+    Good.STEEL: "钢铁",
+    Good.BRICK: "砖头",
+    Good.CLOTH: "纺织品",
+    Good.FERTILIZER: "化肥",
+    Good.MACHINERY: "机械",
+    Good.BUILDING: "建筑",
+}

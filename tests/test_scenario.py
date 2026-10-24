@@ -38,7 +38,7 @@ class ScenarioTests(unittest.TestCase):
         self.assertGreater(self.final["farm_machinery"], 0)
 
     def test_agricultural_labour_productivity_rises(self):
-        # Initial food output is 120 t with 600 agricultural workers (0.20).
+        # 初始粮食产出 120 吨、600 名农业工人（人均 0.20）。
         self.assertGreater(self.final["ag_productivity"], 0.21)
 
     def test_same_seed_is_deterministic(self):

@@ -1,9 +1,8 @@
-"""Static calibration for the V0.2 model.
+"""V0.2 模型的静态校准参数。
 
-All supply-side quantities are monthly.  ``capacity`` on an equipment type is the
-output at skill = 1.0; actual output is multiplied by the average skill of the
-operating workers.  This keeps the PRD's skill-growth mechanism (1.0 -> 2.0)
-meaningful without hard-coding two different production tables.
+所有供给侧数量均为月度值。设备类型的 ``capacity`` 是熟练度 1.0 时的产出；
+实际产出再乘以在岗工人的平均熟练度。这样既保留了 PRD 的熟练度成长机制
+（1.0 -> 2.0），又不需要硬编码两套生产表。
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from typing import Dict, Tuple
 from .enums import Good, Industry
 
 # ---------------------------------------------------------------------------
-# Prices and household parameters
+# 价格与家庭参数
 # ---------------------------------------------------------------------------
 
 INITIAL_PRICES: Dict[Good, float] = {
@@ -29,46 +28,46 @@ INITIAL_PRICES: Dict[Good, float] = {
     Good.BUILDING: 10.0,
 }
 
-# Monthly subsistence basket (PRD 2.2.1).
-FOOD_PER_WORKER = 0.10          # tonnes / month
-CLOTH_PER_WORKER = 1.0          # pieces / month
-HOUSING_PER_WORKER = 0.20       # square metres / month
+# 月度温饱篮子（PRD 2.2.1）。
+FOOD_PER_WORKER = 0.10          # 吨 / 月
+CLOTH_PER_WORKER = 1.0          # 件 / 月
+HOUSING_PER_WORKER = 0.20       # 平方米 / 月
 
 COMFORT_MULTIPLIER = 1.5
 COMFORT_SAVINGS = 60.0
 LEISURE_SAVINGS = 120.0
 
-# Labour supply.  Workers choose hours from this set; wages are pro-rata.
+# 劳动供给：工人从这些工时中选择，工资按工时比例发放。
 HOURS_OPTIONS = (16, 12, 8)
 DEFAULT_HOURS = 16
 
-# Skill growth: 1.0 -> 2.0 over roughly five years of employment.
+# 熟练度成长：在业约五年从 1.0 升到 2.0。
 SKILL_MIN = 1.0
 SKILL_MAX = 2.0
 SKILL_GROWTH_PER_MONTH = 1.0 / 60.0
 
-# Survival: hunger is a multi-month process, not a one-month coin flip.
+# 生存：饥饿是多月过程，不是单月掷硬币。
 HUNGER_DEATH_AFTER_MONTHS = 3
 HUNGER_DEATH_BASE = 0.08
 HUNGER_DEATH_STEP = 0.08
 HUNGER_DEATH_CAP = 0.50
 
-# Wages / labour market
+# 工资 / 劳动市场
 WAGE_BASE = 20.0
 WAGE_SEARCH_PREMIUM = 0.08
 WAGE_SWITCH_THRESHOLD = 0.06
 MAX_HIRES_PER_ENTERPRISE_PER_MONTH = 20
 
-# Capitalists
-CAPITALIST_CONSUMPTION_RATE = 0.02   # share of cash spent per month
+# 资产阶级
+CAPITALIST_CONSUMPTION_RATE = 0.02   # 每月消费现金比例
 CAPITALIST_MIN_CONSUMPTION = 100.0
 CAPITALIST_FOOD = 0.1
 CAPITALIST_CLOTH = 5.0
 CAPITALIST_HOUSING = 1.0
 
-# Investment
-INVESTMENT_HURDLE = 0.012            # minimum expected monthly return on capital
-INVESTMENT_RESERVE_MONTHS = 3.0      # keep this many months of wages after investing
+# 投资
+INVESTMENT_HURDLE = 0.012            # 最低预期月资本回报率
+INVESTMENT_RESERVE_MONTHS = 3.0      # 投资后保留的工资月数
 MAX_NEW_FIRMS_PER_TICK = 1
 MAX_PROJECTS_PER_TICK = 5
 MAX_ACTIVE_PROJECTS = 10
@@ -76,16 +75,16 @@ PROJECT_TIMEOUT_MONTHS = 18
 DEPRECIATION_MONTHS = 120.0
 DIVIDEND_PAYOUT = 0.50
 
-# Land market
+# 土地市场
 TOTAL_LAND_MU = 6000.0
-INITIAL_LAND_PRICE = 100.0          # yuan / mu
-LAND_RESERVATION_PRICE = 150.0      # smallholders sell only above this
+INITIAL_LAND_PRICE = 100.0          # 元 / 亩
+LAND_RESERVATION_PRICE = 150.0      # 自耕农只在此价格以上卖地
 LAND_PRICE_STEP = 0.05
-LAND_SALES_PER_TICK = 0.02          # at most 2% of smallholder land per month
+LAND_SALES_PER_TICK = 0.02          # 每月最多出售自耕农土地的 2%
 MIN_CAPITALIST_FARM_MU = 50.0
 TARGET_CAPITALIST_FARM_MU = 100.0
 
-# Reference-price tatonnement
+# 参考价试探过程
 PRICE_STEP = 0.05
 PRICE_FLOOR = 0.01
 
@@ -95,7 +94,7 @@ BANK_LOAN_MONTHS = 3.0
 
 
 # ---------------------------------------------------------------------------
-# Production catalogue
+# 生产目录
 # ---------------------------------------------------------------------------
 
 
@@ -104,30 +103,30 @@ class EquipmentType:
     key: str
     label: str
     industry: Industry
-    capacity: float                 # output / month at skill 1
-    workers: int                    # workers needed for full capacity
-    capital_good: Good | None       # good required to build one unit
-    capital_cost: float = 0.0       # units of capital_good
+    capacity: float                 # 熟练度 1 时的月产出
+    workers: int                    # 满产所需工人
+    capital_good: Good | None       # 建造一台设备所需商品
+    capital_cost: float = 0.0       # 所需资本品数量
     build_months: int = 0
-    power: float = 0.0              # agriculture: land-per-worker multiplier
-    building_cost: float = 0.0      # square metres required per unit
+    power: float = 0.0              # 农业：人均土地乘数
+    building_cost: float = 0.0      # 每台设备所需建筑面积
 
 
 @dataclass(frozen=True)
 class SectorParams:
     industry: Industry
     output: Good
-    inputs: Dict[Good, float]       # input units per output unit
+    inputs: Dict[Good, float]       # 每单位产出的投入量
     equipment: Tuple[str, ...]
     max_firms: int
     is_resource: bool = False
 
 
 EQUIPMENT: Dict[str, EquipmentType] = {
-    # Agriculture: machinery raises land per worker, not yield directly.
+    # 农业：农机提高人均土地，不直接提高亩产。
     "farm_machinery": EquipmentType(
         key="farm_machinery",
-        label="farm machinery",
+        label="农机",
         industry=Industry.AGRICULTURE,
         capacity=0.0,
         workers=0,
@@ -137,10 +136,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         power=1.0,
         building_cost=0.0,
     ),
-    # Coal / iron
+    # 煤炭 / 铁矿
     "hand_mine": EquipmentType(
         key="hand_mine",
-        label="hand mine",
+        label="手工矿井",
         industry=Industry.COAL_MINE,
         capacity=10.0,
         workers=10,
@@ -148,7 +147,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "mechanized_mine": EquipmentType(
         key="mechanized_mine",
-        label="mechanized mine",
+        label="机械化矿井",
         industry=Industry.COAL_MINE,
         capacity=100.0,
         workers=10,
@@ -157,10 +156,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         build_months=2,
         building_cost=0.0,
     ),
-    # Steel: 2^N furnace family, base 20 t at skill 1.
+    # 炼钢：2 的 N 次方炉型，熟练度 1 时基准为 20 吨。
     "furnace_20": EquipmentType(
         key="furnace_20",
-        label="20 t furnace",
+        label="20 吨炼钢炉",
         industry=Industry.STEEL_MILL,
         capacity=20.0,
         workers=12,
@@ -171,7 +170,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "furnace_40": EquipmentType(
         key="furnace_40",
-        label="40 t furnace",
+        label="40 吨炼钢炉",
         industry=Industry.STEEL_MILL,
         capacity=40.0,
         workers=13,
@@ -182,7 +181,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "furnace_80": EquipmentType(
         key="furnace_80",
-        label="80 t furnace",
+        label="80 吨炼钢炉",
         industry=Industry.STEEL_MILL,
         capacity=80.0,
         workers=14,
@@ -191,10 +190,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         build_months=4,
         building_cost=0.0,
     ),
-    # Brick
+    # 砖
     "brick_kiln": EquipmentType(
         key="brick_kiln",
-        label="brick kiln",
+        label="砖窑",
         industry=Industry.BRICK_FACTORY,
         capacity=100.0,
         workers=50,
@@ -205,7 +204,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "brick_kiln_large": EquipmentType(
         key="brick_kiln_large",
-        label="large brick kiln",
+        label="大型砖窑",
         industry=Industry.BRICK_FACTORY,
         capacity=200.0,
         workers=55,
@@ -214,10 +213,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         build_months=3,
         building_cost=0.0,
     ),
-    # Textile
+    # 纺织
     "hand_loom": EquipmentType(
         key="hand_loom",
-        label="hand loom",
+        label="手织机",
         industry=Industry.TEXTILE_MILL,
         capacity=50.0,
         workers=1,
@@ -225,7 +224,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "industrial_loom": EquipmentType(
         key="industrial_loom",
-        label="industrial loom",
+        label="工业织机",
         industry=Industry.TEXTILE_MILL,
         capacity=500.0,
         workers=5,
@@ -234,10 +233,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         build_months=2,
         building_cost=0.0,
     ),
-    # Machinery
+    # 机械
     "hand_forge": EquipmentType(
         key="hand_forge",
-        label="hand forge",
+        label="手工锻炉",
         industry=Industry.MACHINERY_FACTORY,
         capacity=5.0,
         workers=10,
@@ -245,7 +244,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "machine_tool": EquipmentType(
         key="machine_tool",
-        label="machine tool",
+        label="机床",
         industry=Industry.MACHINERY_FACTORY,
         capacity=20.0,
         workers=10,
@@ -254,10 +253,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         build_months=2,
         building_cost=0.0,
     ),
-    # Construction
+    # 施工
     "hand_crew": EquipmentType(
         key="hand_crew",
-        label="hand construction crew",
+        label="手工施工队",
         industry=Industry.CONSTRUCTION,
         capacity=50.0,
         workers=20,
@@ -265,7 +264,7 @@ EQUIPMENT: Dict[str, EquipmentType] = {
     ),
     "construction_machinery": EquipmentType(
         key="construction_machinery",
-        label="construction machinery",
+        label="施工机械",
         industry=Industry.CONSTRUCTION,
         capacity=100.0,
         workers=10,
@@ -274,10 +273,10 @@ EQUIPMENT: Dict[str, EquipmentType] = {
         build_months=2,
         building_cost=0.0,
     ),
-    # Fertilizer
+    # 化肥
     "reactor": EquipmentType(
         key="reactor",
-        label="fertilizer reactor",
+        label="化肥反应炉",
         industry=Industry.FERTILIZER_FACTORY,
         capacity=20.0,
         workers=5,
@@ -357,7 +356,7 @@ SECTOR_PARAMS: Dict[Industry, SectorParams] = {
     ),
 }
 
-# Agriculture: base yield per mu per month at skill 1.
+# 农业：熟练度 1 时每亩每月的基础产量。
 BASE_GRAIN_YIELD = 0.01
 FERTILIZER_PER_MU = 0.01
 FERTILIZER_YIELD_MULTIPLIER = 2.0

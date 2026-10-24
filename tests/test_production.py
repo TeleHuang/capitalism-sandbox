@@ -36,8 +36,8 @@ class ProductionTests(unittest.TestCase):
         before = desired_workers(self.farm)
         self.farm.add_equipment("farm_machinery", 1)
         after = desired_workers(self.farm)
-        self.assertEqual(before, 10)  # one worker per 10 mu
-        self.assertEqual(after, 5)    # one worker per 20 mu
+        self.assertEqual(before, 10)  # 每 10 亩 1 个工人
+        self.assertEqual(after, 5)    # 每 20 亩 1 个工人
 
 
 if __name__ == "__main__":

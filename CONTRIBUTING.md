@@ -1,40 +1,47 @@
-# Contributing / Development Workflow
+# 贡献与开发流程
 
-## Ownership
+## 所有权
 
-| Artifact | Owner | Rule |
+| 产物 | 所有者 | 规则 |
 |---|---|---|
-| `02_需求定义文档.md` | Human | The Code Bot proposes changes, never edits silently. |
-| `03_架构设计文档.md` | Code Bot | Must describe the mechanisms actually implemented in `src/ecosim/`. |
-| `src/`, `tests/`, `scripts/` | Code Bot | Code changes must keep the architecture document truthful. |
-| `docs/REQUIREMENTS_REVIEW.md` | Code Bot | Conflict log with options for the human. |
-| `04_开发日志文档.md` | Code Bot | Append a short entry per milestone. |
+| `02_需求定义文档.md` | 人 | Code Bot 只提案，不静默修改。 |
+| `03_架构设计文档.md` | Code Bot | 必须描述 `src/ecosim/` 里实际存在的机制。 |
+| `src/`、`tests/` | Code Bot | 代码改动必须同步更新架构文档。 |
+| `docs/REQUIREMENTS_REVIEW.md` | Code Bot | 记录需求冲突和选项。 |
+| `04_开发日志文档.md` | Code Bot | 每个里程碑追加一条简短记录。 |
+| `web/` | Code Bot | HTML 发行版；当前规划中。 |
 
-## The loop
+## 循环
 
-1. Read `02_需求定义文档.md`. If a mechanism is underspecified, design it in the architecture
-   document first.
-2. If a requirement is economically/historically implausible or internally inconsistent:
-   - add an entry to `docs/REQUIREMENTS_REVIEW.md`;
-   - present 2–4 concrete options with a recommendation;
-   - do **not** change `02_需求定义文档.md` until the human chooses.
-3. Implement the chosen design in `src/ecosim/`.
-4. Add or update a deterministic regression test in `tests/`.
-5. Update `03_架构设计文档.md` in the same change.
-6. Append a line to `04_开发日志文档.md`.
-7. Run:
+1. 阅读 `02_需求定义文档.md`。如果某个机制没有写清楚，先在架构文档里设计它。
+2. 如果需求在经济/史实上不合理，或内部矛盾：
+   - 在 `docs/REQUIREMENTS_REVIEW.md` 增加一条；
+   - 给出 2–4 个具体选项，并标明推荐项；
+   - 在人做出选择之前，**不要**修改 `02_需求定义文档.md`。
+3. 在 `src/ecosim/` 实现选定的设计。
+4. 在 `tests/` 增加或更新确定性回归测试。
+5. 在同一个变更里更新 `03_架构设计文档.md`。
+6. 在 `04_开发日志文档.md` 追加一行。
+7. 运行：
    ```powershell
    $env:PYTHONPATH = "src"
    python -m unittest discover -s tests -v
    python -m ecosim --months 240 --seed 1
    ```
 
-## Definition of done
+## 完成标准
 
-- [ ] `python -m unittest discover -s tests -v` passes.
-- [ ] A 240-month run with a fixed seed completes without warnings/errors.
-- [ ] Money is conserved (the audit delta is below 0.01).
-- [ ] No core sector has zero output for three consecutive months unless the scenario intentionally
-      leaves it uninitialised.
-- [ ] The architecture document names the modules, formulas and decisions that exist in the code.
-- [ ] Any requirement conflict is recorded with options, not hidden in code.
+- [ ] `python -m unittest discover -s tests -v` 通过。
+- [ ] 固定随机种子下 240 个月运行完成，无异常。
+- [ ] 货币总量守恒（审计误差小于 0.01）。
+- [ ] 除非场景刻意不启用，核心行业不出现连续 3 个月零产出。
+- [ ] 架构文档写明了代码里存在的模块、公式和决策。
+- [ ] 需求冲突已记录并给出选项，而不是藏在代码里。
+- [ ] 文档和代码注释使用中文。
+
+## HTML 发行版约定
+
+- Python 是逻辑参考实现；HTML 是最终发行版。
+- HTML 版本必须能在浏览器直接运行，不要求安装 Python。
+- 两套实现共享同一套经济逻辑定义；用固定随机种子的黄金运行样例约束结果一致。
+- 在 HTML 版本落地前，所有规则改动以 Python 参考实现和测试为准。
