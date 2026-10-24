@@ -8,9 +8,10 @@
 ## 当前基线
 
 - 分支：`v0.4-integration`
-- 基线提交：`9fc7117`（V0.4 负反馈修复、历史阶段与政府/MMT 模块）
+- 最新提交：`7926334`（前后端分离 V0.4 驾驶舱）；基线 `9fc7117`
 - Python 版本：0.4.0
 - 测试：33 个全绿（`tests/`）
+- UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
 - 已实现：会计修正、L1 生产—库存—订单、L3 投资/手工 t0/替换投资、
   L5 工资曲线/精确用工/跳槽修正、粮食平准库存、银行存款中介、
   classical / keynesian / mmt 三种制度、CLI `--regime`、制度对比脚本。
@@ -36,6 +37,28 @@
 4. **化肥物流**：首次使用已提前到 T20/T36，但仍偏晚；需要周转资金/价格校准。
 5. **验证套件**：冲击—恢复、20 seeds、典型事实；当前模型接近确定性。
 6. **HTML 单文件发行版**：Python 稳定后同步 `web/engine-preview.html`。
+
+## 并行版本树（进行中）
+
+基线：`506d92e`（v0.4-integration）。每个 feature 一个 worktree/分支：
+
+| 分支 | worktree | 状态/目标 |
+|---|---|---|
+| `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | **已合并** `d8cdae7`：前后端分离 UI（Python http.server + HTML/JS，localhost） |
+| `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停（减少 CPU/风扇） |
+| `feature/services` | `.claude/worktrees/services` | **进行中**：服务业/非正规部门，降低古典 43% 失业 |
+| `feature/l2` | `.claude/worktrees/l2` | 暂停（减少 CPU/风扇），worktree 保留 |
+| `feature/fertilizer` | `.claude/worktrees/fertilizer` | 暂停（减少 CPU/风扇），worktree 保留 |
+| `feature/validation` | `.claude/worktrees/validation` | **进行中**：冲击测试、不变量、验证报告 |
+
+集成规则：子代理在各自 worktree 提交；主代理审查 diff、跑测试、按
+services → validation → UI 的顺序 cherry-pick 到 `v0.4-integration`；
+暂停的 l2/fertilizer 等机器空闲/用户确认后再续。冲突时以测试和用户可见指标为准。
+
+**UI 方向（用户确认）**：前后端分离，不为每个版本生成巨大自包含 HTML。
+`scripts/serve_dashboard.py` 用 Python 标准库 `http.server` 提供
+`/api/run` 和 `/api/compare`；`web/v04/index.html` + `app.js` 通过 fetch 渲染。
+启动后浏览器打开 `http://127.0.0.1:8765`。这也更省 token/内存。
 
 ## 工作方式
 
