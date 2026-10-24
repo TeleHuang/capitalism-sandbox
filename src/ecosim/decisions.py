@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 from .config import (
     BASE_GRAIN_YIELD,
     EQUIPMENT,
+    FERTILIZER_COAL_BUFFER_MONTHS,
     FERTILIZER_PER_MU,
     FERTILIZER_YIELD_MULTIPLIER,
     INVESTMENT_HURDLE,
@@ -181,7 +182,13 @@ def input_needs(engine: "Engine", enterprise: "Enterprise") -> dict[Good, float]
     expected_output = capacity_at_skill_one(enterprise) * plan * skill
     for good, ratio in params.inputs.items():
         target = expected_output * ratio
-        safety = 0.5 * target
+        # 化肥厂只有煤一种投入，且停炉后恢复成本高；保留更厚的煤库存。
+        safety_months = (
+            FERTILIZER_COAL_BUFFER_MONTHS
+            if enterprise.industry == Industry.FERTILIZER_FACTORY
+            else 0.5
+        )
+        safety = safety_months * target
         needed = target + safety - enterprise.inv(good)
         if needed > 1e-9:
             needs[good] = needed

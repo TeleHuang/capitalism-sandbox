@@ -191,7 +191,9 @@ for prefix, industry, label, capacity, workers, good, t0, upgrade, build in [
     ("textile", Industry.TEXTILE_MILL, "织机", 50.0, 1, Good.MACHINERY, 0.0, 5.0, 1),
     ("machinery", Industry.MACHINERY_FACTORY, "机械工坊", 5.0, 10, Good.STEEL, 0.0, 20.0, 1),
     ("construction", Industry.CONSTRUCTION, "施工队", 50.0, 20, Good.MACHINERY, 0.0, 3.0, 1),
-    ("fertilizer", Industry.FERTILIZER_FACTORY, "反应炉", 20.0, 5, Good.MACHINERY, 1.0, 2.0, 2),
+    # 反应炉建设期 1 个月：2 个月会让化肥厂错过第一批资本主义农场
+    # 的采用窗口，造成“农场想买、工厂还在建”的额外停摆。
+    ("fertilizer", Industry.FERTILIZER_FACTORY, "反应炉", 20.0, 5, Good.MACHINERY, 1.0, 2.0, 1),
 ]:
     EQUIPMENT.update(
         _make_equipment_tiers(
@@ -332,3 +334,11 @@ BASE_GRAIN_YIELD = 0.01
 FERTILIZER_PER_MU = 0.01
 FERTILIZER_YIELD_MULTIPLIER = 2.0
 LAND_PER_WORKER_BASE = 10.0
+
+# 化肥厂周转资金：煤是唯一投入，且必须用现金现货采购。
+# 为其保留 N 个月满产用煤所需现金，避免把最后一笔现金锁进反应炉，
+# 导致设备建成却无煤可烧的“有产能、零产出”状态。
+FERTILIZER_COAL_BUFFER_MONTHS = 2.0
+# 化肥短缺时，化肥厂在招聘队列中获得优先权（只影响失业者/跳槽顺序，
+# 不改变工资形成机制）。化肥是农业的互补投入，缺工时优先补位。
+FERTILIZER_HIRING_PRIORITY = True

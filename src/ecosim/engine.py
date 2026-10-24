@@ -23,6 +23,8 @@ from .config import (
     DEPRECIATION_MONTHS,
     DIVIDEND_PAYOUT,
     EQUIPMENT,
+    FERTILIZER_COAL_BUFFER_MONTHS,
+    FERTILIZER_HIRING_PRIORITY,
     FERTILIZER_PER_MU,
     FOOD_PER_WORKER,
     HOUSING_PER_WORKER,
@@ -180,6 +182,52 @@ class Engine:
         )
 
     # ------------------------------------------------------------------
+    # 化肥供应 / 周转资金
+    # ------------------------------------------------------------------
+    def fertilizer_supply_short(self) -> bool:
+        """化肥是否处于短缺状态。
+
+        用“上月行业零产出”或“库存低于可机械化农场的月需求”判断。
+        短缺时化肥厂在招聘队列中优先补位；供应恢复后自动退出优先。
+        """
+        if self._zero_output_streak.get(Good.FERTILIZER.value, 0) > 0:
+            return True
+        stock = sum(
+            enterprise.inv(Good.FERTILIZER)
+            for enterprise in self.active_enterprises(Industry.FERTILIZER_FACTORY)
+        )
+        potential = sum(
+            farm.land * FERTILIZER_PER_MU
+            for farm in self.active_enterprises(Industry.AGRICULTURE)
+            if farm.modernization_capable
+        )
+        return potential > 1e-9 and stock < potential
+
+    def fertilizer_coal_reserve(
+        self, enterprise: Enterprise, capacity: Optional[float] = None
+    ) -> float:
+        """化肥厂为购买煤而保留的周转资金（元）。
+
+        只对化肥厂生效：煤是唯一投入且必须现金采购。投资决策和
+        采购下单都从这里取同一个下限，避免现金被设备锁死。
+        """
+        if enterprise.industry != Industry.FERTILIZER_FACTORY:
+            return 0.0
+        params = SECTOR_PARAMS[Industry.FERTILIZER_FACTORY]
+        coal_ratio = params.inputs.get(Good.COAL, 0.0)
+        if coal_ratio <= 0:
+            return 0.0
+        if capacity is None:
+            capacity = capacity_at_skill_one(enterprise)
+        coal_price = self.market.reference_prices.get(Good.COAL, 0.0)
+        return (
+            capacity
+            * coal_ratio
+            * FERTILIZER_COAL_BUFFER_MONTHS
+            * coal_price
+        )
+
+    # ------------------------------------------------------------------
     # 工厂辅助方法
     # ------------------------------------------------------------------
     def create_worker(
@@ -284,6 +332,19 @@ class Engine:
         if not priority and active_projects >= MAX_ACTIVE_PROJECTS:
             return False
         et = EQUIPMENT[equipment_key]
+        # 化肥厂 2 台反应炉的硬上限必须包含在建项目。替换投资走的是
+        # 这条路径，如果这里不拦，企业会每 12 个月把一台机械品和
+        # 项目现金锁进注定只能进资产池的第三台反应炉。
+        if et.industry == Industry.FERTILIZER_FACTORY:
+            pending = sum(
+                project.quantity
+                for project in self.projects.values()
+                if project.active
+                and project.enterprise_id == enterprise.id
+                and project.industry == Industry.FERTILIZER_FACTORY
+            )
+            if enterprise.total_equipment() + pending >= 2:
+                return False
         needed: Dict[Good, float] = {}
         if et.capital_good is not None and et.capital_cost > 0:
             needed[et.capital_good] = et.capital_cost
@@ -298,6 +359,12 @@ class Engine:
         workers = self.enterprise_workers(enterprise)
         wage_bill = sum(w.wage * w.effective_labor for w in workers)
         reserve = max(wage_bill * 3.0, 100.0)
+        if et.industry == Industry.FERTILIZER_FACTORY:
+            # 新反应炉投产后还要买煤；把这笔周转资金一起留出来。
+            reserve += self.fertilizer_coal_reserve(
+                enterprise,
+                capacity_at_skill_one(enterprise) + et.capacity,
+            )
         if enterprise.cash < estimate * 1.10 + reserve:
             return False
         available = enterprise.cash - reserve
@@ -487,6 +554,20 @@ class Engine:
             * FOOD_PER_WORKER,
         )
         food_security = food_stock < 3.0 * food_need
+        fertilizer_short = (
+            FERTILIZER_HIRING_PRIORITY and self.fertilizer_supply_short()
+        )
+
+        def hiring_order(enterprise_id: str) -> tuple[int, float]:
+            """短缺时化肥厂排在招聘队列最前，但仍按工资报价竞争。"""
+            enterprise = self.enterprises[enterprise_id]
+            critical = (
+                0
+                if fertilizer_short
+                and enterprise.industry == Industry.FERTILIZER_FACTORY
+                else 1
+            )
+            return critical, -offers[enterprise_id]
 
         for enterprise in self.active_enterprises():
             workers = self.enterprise_workers(enterprise)
@@ -536,8 +617,7 @@ class Engine:
         unemployed.sort(key=lambda w: (w.cash, w.id))
         hiring = sorted(
             [e for e in vacancies if vacancies[e] > 0],
-            key=lambda eid: offers[eid],
-            reverse=True,
+            key=hiring_order,
         )
         for enterprise_id in hiring:
             enterprise = self.enterprises[enterprise_id]
@@ -556,8 +636,7 @@ class Engine:
         # 有限跳槽：工人把自己的工资与最好的空缺报价比较。
         hiring = sorted(
             [e for e in vacancies if vacancies[e] > 0],
-            key=lambda eid: offers[eid],
-            reverse=True,
+            key=hiring_order,
         )
         switches = 0
         if hiring:
@@ -1378,9 +1457,18 @@ class Engine:
             wage_bill = sum(w.wage * w.effective_labor for w in workers)
             # 营运资本：企业现金不足时，所有者先注入一部分。
             # 金本位下这是权益注资，不创造货币。
-            required_cash = wage_bill * 2.0 + sum(
+            input_cash = sum(
                 qty * prices.get(good, 0.0) * 1.06 for good, qty in needs.items()
-            ) * 0.5
+            )
+            required_cash = wage_bill * 2.0 + input_cash * 0.5
+            if enterprise.industry == Industry.FERTILIZER_FACTORY:
+                # 化肥厂只有煤一种投入：先保证采购现金和煤库存缓冲，
+                # 其余现金才可以拿去投资/分红。
+                required_cash = (
+                    wage_bill * 2.0
+                    + input_cash
+                    + self.fertilizer_coal_reserve(enterprise)
+                )
             if enterprise.cash < required_cash:
                 owner = self.capitalists.get(enterprise.owner_id)
                 if owner is not None and owner.cash > 0:
