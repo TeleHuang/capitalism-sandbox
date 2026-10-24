@@ -101,6 +101,15 @@ class Engine:
         self.demand_regime: str = "fixed"
         # 是否启用银行存款中介（Keynesian/MMT 启用；古典默认关闭）。
         self.bank_intermediation: bool = False
+        # --- 冲击测试钩子（默认全部中性，不改变基线行为）---------------
+        # 行业产出乘数：{Industry: multiplier}；默认为空 = 1.0。
+        self.productivity_multipliers: Dict[Industry, float] = {}
+        # 家庭非食品（衣着/住房）消费乘数；食品是生存品，不在此列。
+        self.worker_demand_scale: float = 1.0
+        # 资本家消费乘数（按可支配消费预算缩放）。
+        self.capitalist_demand_scale: float = 1.0
+        # 银行对工资缺口放贷的比例；1.0 = 正常，0.0 = 完全信贷冻结。
+        self.lending_scale: float = 1.0
         self.stats: List[dict] = []
         self.money_initial = 0.0
         self.dead_this_month = 0
@@ -159,6 +168,7 @@ class Engine:
             + sum(e.cash for e in self.enterprises.values() if e.active)
             + sum(p.cash for p in self.projects.values() if p.active)
             + self.bank.cash
+            + self.bank.frozen_cash
             + self.food_reserve.cash
             + (self.government.cash if self.government is not None else 0.0)
         )
@@ -654,7 +664,12 @@ class Engine:
                     owner.cash -= injection
                     enterprise.cash += injection
             if enterprise.cash < bill:
-                self.bank.lend(enterprise, bill - enterprise.cash)
+                shortfall = bill - enterprise.cash
+                # 信贷冲击测试钩子：默认 1.0，完全等同原行为。
+                self.bank.lend(
+                    enterprise,
+                    shortfall * max(0.0, getattr(self, "lending_scale", 1.0)),
+                )
             factor = 1.0
             if enterprise.cash < bill:
                 factor = max(0.0, enterprise.cash / bill)
@@ -1142,9 +1157,13 @@ class Engine:
             Good.CLOTH: worker.cloth,
             Good.BUILDING: worker.housing,
         }
+        # 需求冲击钩子：只削减非食品消费；食品是生存品。
+        scale = max(0.0, getattr(self, "worker_demand_scale", 1.0))
         cash_left = worker.cash
         for good in goods:
             need = max(0.0, quantities[good] - stock[good])
+            if good != Good.FOOD:
+                need *= scale
             if need <= 1e-9:
                 continue
             bid_multiplier = (
@@ -1193,7 +1212,10 @@ class Engine:
             if cloth_gap > 1e-9 and cash_left > 0:
                 bid = prices[Good.CLOTH] * 1.04
                 budget = cash_left * 0.60
-                qty = min(cloth_gap, budget / max(bid, 1e-9))
+                qty = min(
+                    cloth_gap * getattr(self, "worker_demand_scale", 1.0),
+                    budget / max(bid, 1e-9),
+                )
                 if qty > 1e-9:
                     self.market.submit_buy(worker, Good.CLOTH, qty, bid)
                     cash_left -= qty * bid
@@ -1201,7 +1223,10 @@ class Engine:
             housing_gap = max(0.0, HOUSING_PER_WORKER * mult - worker.housing)
             if housing_gap > 1e-9 and cash_left > 0:
                 bid = prices[Good.BUILDING] * 1.04
-                qty = min(housing_gap, cash_left * 0.50 / max(bid, 1e-9))
+                qty = min(
+                    housing_gap * getattr(self, "worker_demand_scale", 1.0),
+                    cash_left * 0.50 / max(bid, 1e-9),
+                )
                 if qty > 1e-9:
                     self.market.submit_buy(worker, Good.BUILDING, qty, bid)
 
@@ -1209,7 +1234,7 @@ class Engine:
             budget = max(
                 CAPITALIST_MIN_CONSUMPTION,
                 capitalist.cash * CAPITALIST_CONSUMPTION_RATE,
-            )
+            ) * getattr(self, "capitalist_demand_scale", 1.0)
             budget = min(budget, max(0.0, capitalist.cash))
             cash_left = budget
 
@@ -1734,6 +1759,7 @@ class Engine:
             "active_enterprises": len(self.active_enterprises()),
             "money_total": money_total,
             "bank_cash": self.bank.cash,
+            "bank_frozen_cash": self.bank.frozen_cash,
             "bank_loans": sum(self.bank.loans.values()),
             "bank_write_offs": self.bank.write_offs,
             "bank_deposits": sum(self.bank.deposits.values()),
@@ -1744,6 +1770,9 @@ class Engine:
             ),
             "government_transfers": government.transfers if government else 0.0,
             "government_spending": government.spending if government else 0.0,
+            "government_interest_paid": (
+                government.interest_paid if government else 0.0
+            ),
             "government_market_spending": self.market.government_spending,
             "government_deficit": government.deficit if government else 0.0,
             "government_jg_workers": (
@@ -1794,6 +1823,10 @@ class Engine:
             "food_output": food_output,
             "prices": {g.value: prices[g] for g in Good},
             "production": {g.value: self.production_month.get(g, 0.0) for g in Good},
+            "output_index": sum(
+                self.production_month.get(good, 0.0) * INITIAL_PRICES[good]
+                for good in Good
+            ),
             "volumes": {g.value: self.market.history[g]["volume"] for g in Good},
             "demand": {g.value: self.market.history[g]["demand"] for g in Good},
             "supply": {g.value: self.market.history[g]["supply"] for g in Good},

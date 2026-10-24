@@ -88,6 +88,12 @@ def average_wage(workers: list[Worker]) -> float:
     )
 
 
+def productivity_multiplier(engine: "Engine", enterprise: Enterprise) -> float:
+    """冲击测试钩子：按行业缩放产出。默认 1.0（无冲击）。"""
+    multipliers = getattr(engine, "productivity_multipliers", {})
+    return max(0.0, multipliers.get(enterprise.industry, 1.0))
+
+
 def produce(engine: "Engine", enterprise: Enterprise) -> float:
     """执行企业一个月的生产。
 
@@ -114,7 +120,12 @@ def produce(engine: "Engine", enterprise: Enterprise) -> float:
             enterprise.last_output = 0.0
             return 0.0
         utilisation = min(plan, effective_labor / required)
-        base_capacity = enterprise.land * BASE_GRAIN_YIELD * skill
+        base_capacity = (
+            enterprise.land
+            * BASE_GRAIN_YIELD
+            * skill
+            * productivity_multiplier(engine, enterprise)
+        )
         multiplier = 1.0
         fertilizer_used = 0.0
         if enterprise.use_fertilizer:
@@ -139,7 +150,12 @@ def produce(engine: "Engine", enterprise: Enterprise) -> float:
         return 0.0
 
     utilisation = min(plan, effective_labor / required)
-    theoretical = capacity * utilisation * skill
+    theoretical = (
+        capacity
+        * utilisation
+        * skill
+        * productivity_multiplier(engine, enterprise)
+    )
 
     params = SECTOR_PARAMS[enterprise.industry]
     max_output = theoretical

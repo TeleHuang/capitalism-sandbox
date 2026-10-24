@@ -231,6 +231,9 @@ class Bank:
     deposits: Dict[str, float] = field(default_factory=dict)
     deposit_rate: float = 0.002
     write_offs: float = 0.0
+    # 冲击测试钩子：被冻结/不可放贷的准备金。仍属于银行资产和货币总量，
+    # 但不参与 Bank.lend / 国债购买；默认 0，不改变基线行为。
+    frozen_cash: float = 0.0
 
     def deposit(self, agent, amount: float) -> float:
         """吸收存款：现金从储户转到银行，货币总量不变。"""
@@ -284,7 +287,14 @@ class Bank:
         payable = min(interest, max(enterprise.cash, 0.0))
         enterprise.cash -= payable
         self.cash += payable
-        enterprise.debt += interest - payable
+        unpaid = interest - payable
+        enterprise.debt += unpaid
+        if unpaid > 1e-12:
+            # 资本化利息同样构成银行债权；否则 bank.loans 会系统性
+            # 小于 Σ enterprise.debt，破产核销也会漏记这部分。
+            self.loans[enterprise.id] = (
+                self.loans.get(enterprise.id, 0.0) + unpaid
+            )
         enterprise.month_interest += payable
         return payable
 
