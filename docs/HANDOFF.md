@@ -16,8 +16,8 @@
   `scripts/validate_v05.py`，不再每次开发都跑。性能：240 月约 15–16s，
   60 月约 4s（优化前 131s / 21.5s）。
 - UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
-  （V0.5 人口面板已合并，`3833c23`；截图
-  `web/screenshots/v05-demography-keynesian-60.png`）
+  （V0.5 人口面板 + V0.6 产品图标/工厂点按面板/机制说明已合并 `ca5ebeb`；
+  截图 `web/screenshots/v06-*.png`）
 - 已实现：V0.4 全部机制 + V0.5 个体年龄/性别/家庭、Gompertz 死亡、
   ASFR 生育、儿童 allowance/消费、退休、PAYG 养老金（发薪/经营所得代扣）、
   `LATE_CAPITALISM`、粮食救济缓冲、土地继承/无地承接、家庭农场剩余收入。
@@ -98,7 +98,10 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 | `fix/demography-safety` | `.claude/worktrees/demography-fix` | **已合并** `7429a3b`：救济/养老金/土地/统计修复 |
 | `feature/price-guidance` | `.claude/worktrees/price-guidance` | **待合并/待组合测试**：opt-in 指导价 v1（`33ca831`）+ v2（`7c1d949`）；纯价格仍崩溃，默认 band |
 | `fix/household-farm-income` | `.claude/worktrees/household-income` | **已合并** `0e15fad`：自耕农剩余收入/不借债发自己工资 |
-| `feature/land-reclamation` | （待建） | **规划中**：可开垦土地池、开垦投资、estate 拍卖/再分配 |
+| `feature/land-reclamation` | `.claude/worktrees/land-reclamation` | **未合并** `2f79f0e`：P1–P3 开垦/estate；缺最终全量+600/1200，且触发阈值 180 太高 |
+| `feature/ui-icons` | `.claude/worktrees/ui-icons` | **已合并** `ca5ebeb`：产品图标、工厂面板、机制说明（V0.6 UI） |
+| `feature/v06-demand` | `.claude/worktrees/v06-demand` | **进行中**：收入依赖需求、食品品质/肉类、服务业吸收劳动 |
+| `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **进行中**：生产率工资、8h/16h、删除成本价格带 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |
 | `feature/services` | `.claude/worktrees/services` | 已合并 `79d27de` |
