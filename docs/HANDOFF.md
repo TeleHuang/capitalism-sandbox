@@ -11,11 +11,13 @@
 
 - 分支：`v0.4-integration`
 - 最新提交：见 `git log -1`（V0.5 人口/退休金 + V0.6 A 需求阶梯 +
-  B 工资—生产率/自由价格 + UI 图标/工厂面板）
+  B 工资—生产率/自由价格 + UI/六边形地图 + A2 耐用品）
 - Python 版本：0.6.0（迁移期 oracle；**唯一逻辑源已改为 TS/JS**）
-- **单文件发行版已可用**：`web/release/ecosim-v06.html`（约 584 KiB，双击
+- **单文件发行版已可用**：`web/release/ecosim-v06.html`（约 663 KiB，双击
   打开；JS 引擎 + UI + 图标全部内联，无外部资源）。模块源码在
   `web/release/src/`，构建脚本 `scripts/build_release_v06.mjs`。
+- JS/Node：`node scripts/test_engine_v06.mjs`（15 快速）/`--slow`（16，含
+  四剧本 240 月）；`node scripts/build_release_v06.mjs --check` 验证零外部资源。
 - 本地 Python 驾驶舱只是诊断/oracle，不是最终发行版。
 - 测试：128 fast tests，默认快速套件 **~127s**（12 个 `@slow` skipped，全部 OK）；
   240/600/1200 月长程用 `ECOSIM_SLOW_TESTS=1` 或
@@ -28,6 +30,8 @@
 - 已实现：V0.4 全部机制 + V0.5 个体年龄/性别/家庭、Gompertz 死亡、
   ASFR 生育、儿童 allowance/消费、退休、PAYG 养老金（发薪/经营所得代扣）、
   `LATE_CAPITALISM`、粮食救济缓冲、土地继承/无地承接、家庭农场剩余收入。
+- A2 耐用品/废钢/土地兼并已合并（`202c027`）；A2 默认开启，可在开始页或
+  URL `durables=off` 关闭以重放 A2 之前的 Python 黄金 oracle。
 - 长程验证：`scripts/validate_v05.py --months 1200 --seed 1 --jobs 4`。
 - 性能（seed=1，classical）：240 月约 15–16 秒、60 月约 4 秒；
   优化前约 131 秒 / 21.5 秒（工资报价的 O(n²) 劳动力扫描已缓存）。
@@ -54,9 +58,9 @@
 - 分支：`feature/v06-demand` `1d3bde4`、`feature/v06-wage-price` `9fbcb4d`；
   主线合并 `8a9fdd7` / `727c388`。
 
-## V0.6 单文件 HTML 发行版（`4f15f01`）
+## V0.6 单文件 HTML 发行版（`4f15f01` + A2 `202c027`）
 
-- 文件：`web/release/ecosim-v06.html`（约 584 KiB，双击 / `file://` 打开）。
+- 文件：`web/release/ecosim-v06.html`（约 663 KiB，双击 / `file://` 打开）。
 - 模块源码：`web/release/src/00-core.js` … `60-ui.js`；构建：
   `node scripts/build_release_v06.mjs`（`--check` 验证无外部资源）。
 - 已移植：V0.4 核心（13 商品/12 行业含服务与汽车、市场/生产/劳动/投资/
@@ -122,11 +126,10 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 
 ## 下一步优先级（JS/TS 单一源）
 
-1. **E/F JS/TS 模块化引擎 + 单文件 HTML 发行版（最高优先）**：
-   `feature/html-engine`，模块化 ES modules/TS + Node 测试 + 单文件构建；
-   先交付核心 V0.6 可玩版（V0.4 机制 + 需求/工资/free + 服务/肉类 +
-   人口/养老金尽量），Python 只做黄金 oracle。
-2. **A2 耐用品/生命周期（已实现，`feature/js-durables`）**：衣服 60 月、
+1. **E/F JS/TS 模块化引擎 + 单文件 HTML 发行版（已完成）**：
+   `feature/html-engine` 已合并 `4f15f01`，六边形地图 `83ba3e1`；
+   下一步在单文件 JS 引擎上继续 C/D。
+2. **A2 耐用品/生命周期（已合并 `202c027`，feature `b8a275c`）**：衣服 60 月、
    住房 600 月、农机/车 120 月、废钢/钢厂回购、汽车/住房存量、土地兼并/
    超大型农机。已知简化：独立汽车装配行业（机械厂不切换产出）、砖砌炉窑
    不进入 vintage 寿命（结构资产）、古典 240 月失业约 20.7%/无饥饿死亡，
@@ -155,8 +158,8 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 | `feature/ui-icons` | `.claude/worktrees/ui-icons` | **已合并** `ca5ebeb`：产品图标、工厂面板、机制说明（V0.6 UI） |
 | `feature/v06-demand` | `.claude/worktrees/v06-demand` | **已合并** `8a9fdd7`：收入依赖需求、肉类/服务吸收 |
 | `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **已合并** `727c388`：生产率工资、8h/16h、free 价格制度 |
-| `feature/html-engine` | `.claude/worktrees/html-engine` | **进行中**：TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
-| `feature/js-durables` | `.claude/worktrees/js-durables` | **待合并**：A2 耐用品/废钢/土地兼并（JS 发行版）；A2 可关闭以重放 oracle |
+| `feature/html-engine` | `.claude/worktrees/html-engine` | **已合并** `4f15f01`：TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
+| `feature/js-durables` | `.claude/worktrees/js-durables` | **已合并** `202c027`：A2 耐用品/废钢/土地兼并（JS 发行版）；A2 可关闭以重放 oracle |
 | `feature/v06-durables` | `.claude/worktrees/v06-durables` | **已取消**：A2 推迟到 JS 发行版之后 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |

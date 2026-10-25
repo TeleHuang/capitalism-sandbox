@@ -34,6 +34,7 @@
 | `8a9fdd7` | V0.6 A：收入依赖需求、肉类质量阶梯、服务吸收劳动（cherry-pick 自 `feature/v06-demand` `1d3bde4`） |
 | `4f15f01` | V0.6 单文件 HTML 发行版：JS 引擎/模块化源码/黄金对比（cherry-pick 自 `feature/html-engine` `0336132`） |
 | `83ba3e1` | 发行版六边形城市地图（中心 + 六行业地块，绑定真实统计/工厂面板） |
+| `202c027` | A2 耐用品/废钢/土地兼并（JS 发行版，cherry-pick 自 `feature/js-durables` `b8a275c`） |
 
 ## Feature 分支
 
@@ -54,7 +55,7 @@
 | `feature/v06-demand` | `1d3bde4` | 已合并 | 收入依赖需求/肉类/服务吸收（主线 `8a9fdd7`） |
 | `feature/v06-wage-price` | `9fbcb4d` | 已合并 | 工资—生产率/8h/16h/free 价格（主线 `727c388`） |
 | `feature/html-engine` | `0336132` | 已合并 | TS/JS 单一逻辑源 + 单文件 HTML 核心发行版（主线 `4f15f01`） |
-| `feature/js-durables` | — | 待合并 | A2 耐用品/废钢/土地兼并（JS 发行版，默认开启，可关闭重放 oracle） |
+| `feature/js-durables` | `b8a275c` | 已合并 | A2 耐用品/废钢/土地兼并（JS 发行版，默认开启，可关闭重放 oracle；主线 `202c027`） |
 | `feature/v06-durables` | — | 已取消 | A2 推迟到 JS 发行版之后 |
 
 ## UI 启动
