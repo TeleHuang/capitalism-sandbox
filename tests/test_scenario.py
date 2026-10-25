@@ -21,10 +21,23 @@ class ScenarioTests(unittest.TestCase):
         cls.final = cls.engine.stats[-1]
 
     def test_survives_the_first_five_years_without_a_famine(self):
-        self.assertGreaterEqual(self.final["alive"], 1050)
-        # V0.5 引入年龄/婴儿死亡后，任意月份都可能有少量自然死亡；
-        # 验收线改为“月死亡率 < 1%”（无大规模饥荒），而不是恰好 0。
-        self.assertLess(self.final["death_rate"], 0.01)
+        # V0.5：alive 现在是总人口（初始 1100 成人 + 300 儿童），
+        # 不能再用旧的 1050 成人下限；人口应保持在初始规模的合理区间。
+        self.assertGreaterEqual(self.final["alive"], 1300)
+        self.assertLessEqual(self.final["alive"], 2200)
+        self.assertGreater(self.final["children"], 0)
+        last_year_births = sum(
+            stat["births"] for stat in self.engine.stats[-12:]
+        )
+        self.assertGreater(last_year_births, 0)
+        # 不看最后一个月：饥荒可能发生在中段后恢复。累计饥饿死亡必须为 0，
+        # 且任意月份的总死亡率 < 1%。
+        self.assertEqual(
+            sum(stat["hunger_deaths"] for stat in self.engine.stats), 0
+        )
+        self.assertLess(
+            max(stat["death_rate"] for stat in self.engine.stats), 0.01
+        )
 
     def test_money_is_conserved(self):
         self.assertAlmostEqual(

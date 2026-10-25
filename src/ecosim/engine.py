@@ -28,6 +28,7 @@ from .config import (
     FERTILIZER_HIRING_PRIORITY,
     FERTILIZER_PER_MU,
     FOOD_PER_WORKER,
+    FOOD_RELIEF_BUFFER_MONTHS,
     HOUSING_PER_WORKER,
     INITIAL_LAND_PRICE,
     INITIAL_PRICES,
@@ -570,8 +571,10 @@ class Engine:
             weight = 0.8
         else:
             weight = 0.2
-        # 20..40 岁（含端点）的平均权重约为 0.9143。
-        return weight / 0.9143
+        # 20..40 岁（含端点，241 个月）的离散平均权重为
+        # (60*3.8 + 0.2) / 241 = 0.9469；按此归一化，避免有效生育率
+        # 比名义 TFR 高约 3.6%（旧值 0.9143 假设了错误的年龄带宽）。
+        return weight / 0.9469
 
     def _birth_probability(self, mother: Worker) -> float:
         """育龄女性月度生育概率。
@@ -745,16 +748,21 @@ class Engine:
             parent.children_ids.remove(worker.id)
         # 死亡者若有未成年子女，孩子仍存活但 allowance 归零；
         # 不凭空创造政府/慈善资金，只记录 warning。
+        # 在清空 children_ids 之前选出家庭农场继承人（成年、未退休、
+        # 尚未拥有农场），让土地留在农业生产中而不是沉入 estate_land。
+        heir = self._choose_heir(worker)
         if worker.children_ids:
             for child_id in list(worker.children_ids):
                 child = self.workers.get(child_id)
                 if child is not None and child.alive:
                     child.parent_id = None
-                    self._orphaned_this_month += 1
+                    # 只统计未成年孤儿；成年子女失去家长不构成孤儿。
+                    if child.is_child:
+                        self._orphaned_this_month += 1
             worker.children_ids.clear()
         worker.parent_id = None
 
-        self._settle_estate(worker)
+        self._settle_estate(worker, heir=heir)
 
     def _pay_child_allowances(self, prices: Dict[Good, float]) -> None:
         """家长向儿童转移现金（allowance），儿童自己挂买单。
@@ -1201,6 +1209,10 @@ class Engine:
         )
 
     def _pay_wages(self) -> None:
+        gov = self.government
+        pension_rate = (
+            gov.pension_tax_rate if gov is not None else 0.0
+        )
         for enterprise in self.active_enterprises():
             workers = self.enterprise_workers(enterprise)
             bill = sum(w.wage * w.effective_labor for w in workers)
@@ -1228,10 +1240,20 @@ class Engine:
             if enterprise.cash < bill:
                 factor = max(0.0, enterprise.cash / bill)
             for worker in workers:
-                paid = worker.wage * worker.effective_labor * factor
-                enterprise.cash -= paid
-                worker.cash += paid
-                enterprise.month_wages += paid
+                gross = worker.wage * worker.effective_labor * factor
+                # PAYG 缴费在发薪时从毛工资中代扣，而不是等到月末从
+                # 工人已消费后的剩余现金里再收（那会让实际缴费率远低于
+                # 法定费率）。企业支付毛工资，政府收到缴费，工人拿净工资。
+                contribution = 0.0
+                if pension_rate > 0 and gov is not None:
+                    contribution = gross * pension_rate
+                    gov.cash += contribution
+                    gov.pension_fund += contribution
+                    gov.pension_contributions += contribution
+                    gov.pension_revenue += contribution
+                enterprise.cash -= gross
+                worker.cash += gross - contribution
+                enterprise.month_wages += gross
 
     # ------------------------------------------------------------------
     # 政府 / 央行（历史阶段模块）
@@ -1279,11 +1301,17 @@ class Engine:
             return
         self._government_finance(max(0.0, bill - gov.cash), "wages")
         factor = min(1.0, gov.cash / bill) if bill > 0 else 0.0
+        pension_rate = gov.pension_tax_rate
         for worker_id in gov.jg_workers:
             worker = self.workers[worker_id]
-            paid = worker.wage * worker.effective_labor * factor
-            gov.cash -= paid
-            worker.cash += paid
+            gross = worker.wage * worker.effective_labor * factor
+            contribution = gross * pension_rate if pension_rate > 0 else 0.0
+            # 就业保障工人同样参加 PAYG：毛工资中代扣，净额发放。
+            gov.cash -= gross - contribution
+            worker.cash += gross - contribution
+            gov.pension_fund += contribution
+            gov.pension_contributions += contribution
+            gov.pension_revenue += contribution
         gov.spending += bill * factor
 
     def _produce_government(self) -> None:
@@ -1301,15 +1329,19 @@ class Engine:
         gov.public_capital += output
 
     def _government_finance(self, amount: float, purpose: str) -> float:
-        """为政府支出融资。
+        """为政府支出缺口融资。
 
         MMT：央行购买国债/创造货币；金本位与 Keynesian：向资本家和银行
         发行债券，货币守恒。若融不到足够资金，则让支出按比例缩减。
+
+        ``amount`` 是调用方已经扣除现有 ``gov.cash`` 后的**缺口**；
+        本函数只负责为这个缺口融资，不能再减一次政府现金，否则在
+        ``0 < gov.cash < bill`` 时会系统性少付（UI/养老金/公共投资）。
         """
         gov = self.government
         if gov is None or amount <= 1e-9:
             return 0.0
-        need = max(0.0, amount - gov.cash)
+        need = max(0.0, amount)
         if need <= 1e-9:
             return 0.0
         if gov.fiat_money:
@@ -1347,13 +1379,20 @@ class Engine:
         return raised
 
     def _submit_food_reserve_orders(self) -> None:
-        """粮食平准库存：高价释放，低价收储。"""
+        """粮食平准库存：高价释放，低价收储。
+
+        高价时只释放“救济缓冲”以外的库存。缓冲用于 `_distribute_food_relief`：
+        如果全部卖空，价格机制会在饥荒时把粮食救济变成空账（V0.5 回归）。
+        """
         reserve = self.food_reserve
         price = self.market.reference_prices[Good.FOOD]
         initial = INITIAL_PRICES[Good.FOOD]
         monthly_need = max(1.0, self.feeding_units() * FOOD_PER_WORKER)
-        if price > 1.15 * initial and reserve.food > 1e-9:
-            quantity = min(reserve.food, 0.50 * monthly_need)
+        relief_buffer = FOOD_RELIEF_BUFFER_MONTHS * monthly_need
+        if price > 1.15 * initial and reserve.food > relief_buffer + 1e-9:
+            quantity = min(
+                reserve.food - relief_buffer, 0.50 * monthly_need
+            )
             if quantity > 1e-9:
                 self.market.submit_sell(
                     reserve, Good.FOOD, quantity, price * 0.95
@@ -1423,24 +1462,8 @@ class Engine:
             enterprise.cash -= tax
             gov.cash += tax
             gov.tax_revenue += tax
-        # 养老金缴费（PAYG）：从在业工人现金转入养老基金（政府现金台账）。
-        if gov.pension_tax_rate > 0:
-            for worker in self.workers.values():
-                if not worker.alive or not worker.employed:
-                    continue
-                income = worker.wage * worker.effective_labor
-                if income <= 0:
-                    continue
-                contribution = min(
-                    worker.cash, income * gov.pension_tax_rate
-                )
-                if contribution <= 1e-9:
-                    continue
-                worker.cash -= contribution
-                gov.cash += contribution
-                gov.pension_fund += contribution
-                gov.pension_contributions += contribution
-                gov.pension_revenue += contribution
+        # 养老金缴费已在 `_pay_wages` / `_pay_government_wages` 发薪时
+        # 从毛工资中代扣并记入基金；这里不再从消费后的剩余现金征收。
         # 失业救济（儿童/退休者不进入失业救济）
         avg_wage = self.average_wage()
         for worker in self.workers.values():
@@ -1467,10 +1490,22 @@ class Engine:
             worker.ui_months += 1
         # 养老金发放：替代率 × 社会平均工资；基金不足时显式融资/按比例发放。
         if gov.pension_replacement > 0:
+            # 雇员到龄退休后领取；自耕农/自雇摊主不强制退出经营，但到龄
+            # 后也领取养老金——他们同样缴纳了 PAYG 缴费，不能只缴不领。
+            retirement_age = self.demographics.retirement_age_months
             retirees = [
                 worker
                 for worker in self.workers.values()
-                if worker.alive and worker.retired
+                if worker.alive
+                and (
+                    worker.retired
+                    or (
+                        retirement_age > 0
+                        and worker.is_owner_operator
+                        and not worker.is_child
+                        and worker.age_months >= retirement_age
+                    )
+                )
             ]
             for worker in retirees:
                 worker.pension_income = 0.0
@@ -1495,6 +1530,10 @@ class Engine:
                     if topup > 0:
                         gov.pension_fund += topup
                         gov.pension_subsidy += topup
+                        # 补贴进入基金台账，也必须进入当期收入；
+                        # 否则 fund_t = fund_{t-1} + revenue - spending
+                        # 会漏掉补贴，长程基金恒等式出现缺口。
+                        gov.pension_revenue += topup
                 factor = min(
                     1.0,
                     gov.pension_fund / due,
@@ -2279,18 +2318,99 @@ class Engine:
                 enterprise.cash = 0.0
             enterprise.active = False
 
-    def _settle_estate(self, worker: Worker) -> None:
-        """死亡自耕农的遗产清算：土地回市场，家庭农场停业。
+    def _choose_heir(self, worker: Worker) -> Optional[Worker]:
+        """为死亡自耕农选家庭农场继承人/承接人。
 
-        死亡只把现金转银行是不够的；如果不清理 land.owners 和家庭农场，
-        死者会继续“持有”土地并占据雇工/信贷资源。
+        优先成年子女（未退休、尚未拥有农场/自营摊位，年长者优先）；
+        没有子女时，把土地分配给无地成年劳动者（边疆/土改简化），
+        避免土地沉入 estate_land 后永久退出生产。两者都没有才回市场。
+        """
+        candidates = []
+        for child_id in worker.children_ids:
+            child = self.workers.get(child_id)
+            if child is None or not child.alive:
+                continue
+            if child.is_child or child.retired or child.is_owner_operator:
+                continue
+            if child.id in self.land.enterprise_by_owner:
+                continue
+            candidates.append(child)
+        if candidates:
+            candidates.sort(key=lambda child: (-child.age_months, child.id))
+            return candidates[0]
+
+        landless = [
+            other
+            for other in self.workers.values()
+            if other.alive
+            and not other.is_child
+            and not other.retired
+            and not other.is_owner_operator
+            and other.land_owned <= 1e-9
+            and other.id not in self.land.enterprise_by_owner
+        ]
+        if not landless:
+            return None
+        # 优先现金最少（最需要生计）的劳动者，其次年长者。
+        landless.sort(key=lambda other: (other.cash, -other.age_months, other.id))
+        return landless[0]
+
+    def _transfer_household_farm(
+        self,
+        enterprise: Enterprise,
+        deceased: Worker,
+        heir: Worker,
+        land_mu: float,
+        enterprise_id: str,
+    ) -> None:
+        """把死亡自耕农的家庭农场转给成年子女，避免土地沉入 estate_land。"""
+        # 继承人可能原本受雇于其他企业或就业保障；先退出原岗位。
+        previous = self.enterprises.get(heir.employer_id or "")
+        if previous is not None and heir.id in previous.workers:
+            previous.workers.remove(heir.id)
+        if self.government is not None and heir.id in self.government.jg_workers:
+            self.government.jg_workers.remove(heir.id)
+
+        if deceased.id in enterprise.workers:
+            enterprise.workers.remove(deceased.id)
+        if heir.id not in enterprise.workers:
+            enterprise.workers.append(heir.id)
+        enterprise.owner_id = heir.id
+        self.land.enterprise_by_owner[heir.id] = enterprise_id
+        own_mu = max(land_mu, enterprise.land)
+        if own_mu > 0:
+            self.land.owners[heir.id] = own_mu
+        heir.employer_id = enterprise_id
+        heir.is_owner_operator = True
+        heir.industry = enterprise.industry
+        heir.land_owned = own_mu
+        heir.wage = WAGE_BASE
+        heir.hours = 16
+
+    def _settle_estate(
+        self, worker: Worker, heir: Optional[Worker] = None
+    ) -> None:
+        """死亡自耕农的遗产清算。
+
+        优先把家庭农场转给成年子女（继承）；没有继承人时土地回市场，
+        家庭农场停业。死亡只把现金转银行是不够的；如果不清理
+        land.owners 和家庭农场，死者会继续“持有”土地并占据雇工/信贷资源。
         """
         ent_id = self.land.enterprise_by_owner.pop(worker.id, None)
+        mu = self.land.owners.pop(worker.id, 0.0)
         farm_land = 0.0
         if ent_id:
             enterprise = self.enterprises.get(ent_id)
             if enterprise and enterprise.active:
                 farm_land = enterprise.land
+                if heir is not None and farm_land > 0:
+                    self._transfer_household_farm(
+                        enterprise, worker, heir, mu, ent_id
+                    )
+                    self.bank.deposits.pop(worker.id, 0.0)
+                    worker.land_owned = 0.0
+                    worker.is_owner_operator = False
+                    return
                 for worker_id in list(enterprise.workers):
                     other = self.workers.get(worker_id)
                     if other and other.alive:
@@ -2314,7 +2434,6 @@ class Engine:
                 enterprise.equipment = {}
                 enterprise.land = 0.0
                 enterprise.active = False
-        mu = self.land.owners.pop(worker.id, 0.0)
         # 家庭农场的 enterprise.land 是 land.owners 的会计镜像：上面已把
         # enterprise.land 计入 estate_land，这里只补多出来的部分，避免土地
         # 在死亡清算时被重复计算。
@@ -2332,7 +2451,7 @@ class Engine:
         """粮食救济实物税：库存低于 3 个月需求时，从当月农业产出征收。
 
         这是实物转移（不是货币创造）：用于维持粮食平准库存的救济能力。
-        库存充足时不征收；税率最高 15%，避免长期挤压农场销售。
+        库存充足（>= 3 个月需求）时不征收；税率最高 25%，缺口越大越高。
         """
         monthly_need = max(1.0, self.feeding_units() * FOOD_PER_WORKER)
         target = 3.0 * monthly_need
@@ -2359,10 +2478,12 @@ class Engine:
     def _distribute_food_relief(self) -> None:
         """粮食库存紧急救济。
 
-        市场上食物有库存、但部分家庭因现金约束买不到时，从粮食平准
-        库存直接转移实物。纯实物转移，不改变现金总量；库存耗尽后
-        饥饿死亡机制仍会生效。每月最多释放库存的 10%（至少 5 吨），
-        优先救助饥饿月份最多、现金最少的存活人口。
+        市场上食物有库存、但部分家庭买不到（现金约束、供给/撮合）时，
+        从粮食平准库存直接转移实物。纯实物转移，不改变现金总量；库存
+        耗尽后饥饿死亡机制仍会生效。每月最多释放库存的 25%（至少 10
+        吨），优先救助饥饿月份最多、现金最少的存活人口。粮商在高价
+        出售时必须保留 `FOOD_RELIEF_BUFFER_MONTHS` 个月口粮，否则这里
+        会无粮可发（V0.5 修复的饥荒回归）。
         """
         reserve = self.food_reserve
         if reserve.food <= 1e-9:
@@ -2697,7 +2818,11 @@ class Engine:
             "death_rate_annual": (
                 12.0 * self.dead_this_month / max(population, 1)
             ),
-            "dependency_ratio": retiree_count / max(len(employed), 1),
+            # 总抚养比 = (儿童 + 退休者) / 劳动年龄人口；老年/儿童抚养比
+            # 使用同一分母，避免“总抚养比”只含退休者、且分母与老年比不一致。
+            "dependency_ratio": (
+                children_count + retiree_count
+            ) / max(len(labor_force), 1),
             "old_age_dependency": retiree_count / max(len(labor_force), 1),
             "child_dependency": children_count / max(len(labor_force), 1),
             "age_histogram": age_histogram,
@@ -2744,6 +2869,17 @@ class Engine:
             ),
             "pension_fund": (
                 government.pension_fund if government else 0.0
+            ),
+            "pension_recipients": sum(
+                1 for worker in alive_workers if worker.pension_income > 0
+            ),
+            # 养老金基金是政府现金中的专项台账；若其他支出动用了这笔
+            # 现金，台账超过现金的部分视为对政府的隐性债权/未备付，
+            # 不重复计入货币总量。发放时仍按可用现金比例折算。
+            "pension_fund_unfunded": (
+                max(0.0, government.pension_fund - government.cash)
+                if government
+                else 0.0
             ),
             "central_bank_money": (
                 government.central_bank_money if government else 0.0

@@ -21,6 +21,7 @@ from ecosim.enums import Good
 from ecosim.scenarios import (
     CLASSICAL_LAISSEZ_FAIRE,
     KEYNESIAN_WELFARE,
+    LATE_CAPITALISM,
     MMT_SOVEREIGN,
     build_scenario_1,
 )
@@ -29,6 +30,8 @@ REGIMES = {
     "classical": CLASSICAL_LAISSEZ_FAIRE,
     "keynesian": KEYNESIAN_WELFARE,
     "mmt": MMT_SOVEREIGN,
+    # LATE_CAPITALISM 是金本位 + 养老金补贴路径，纳入逐月不变量。
+    "late_capitalism": LATE_CAPITALISM,
 }
 MONTHS = 60
 

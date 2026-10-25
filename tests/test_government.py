@@ -60,6 +60,22 @@ class GovernmentTests(unittest.TestCase):
             final["money_total"] + 1e-6, engine.money_initial
         )
 
+    def test_government_finance_does_not_double_subtract_cash(self):
+        """调用方传入的是缺口；融资函数不能再减一次政府现金。
+
+        回归：gov.cash=50、缺口=50 时旧实现 need=50-50=0，融资 0，
+        导致 UI/养老金/公共投资在现金部分充足时被系统性少付。
+        """
+        engine = Engine(seed=1)
+        build_scenario_1(engine, config=MMT_SOVEREIGN)
+        gov = engine.government
+        gov.cash = 50.0
+        gov.central_bank_money = 0.0
+        raised = engine._government_finance(50.0, "test")
+        self.assertAlmostEqual(raised, 50.0, places=9)
+        self.assertAlmostEqual(gov.cash, 100.0, places=9)
+        self.assertAlmostEqual(gov.central_bank_money, 50.0, places=9)
+
     def test_job_guarantee_absorbs_unemployed(self):
         engine = Engine(seed=1)
         build_scenario_1(engine, config=MMT_SOVEREIGN)

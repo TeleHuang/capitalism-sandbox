@@ -179,6 +179,10 @@ class MarkupSoftScenarioTests(unittest.TestCase):
         final = engine.stats[-1]
         return {
             "final": final,
+            "stats": engine.stats,
+            "hunger_deaths": sum(
+                stat["hunger_deaths"] for stat in engine.stats
+            ),
             "zero_months": zero_months,
             "zero_total": sum(zero_months.values()),
         }
@@ -199,18 +203,21 @@ class MarkupSoftScenarioTests(unittest.TestCase):
                 config = dataclasses.replace(base, price_regime="markup_soft")
                 result = self._run(config)
                 final = result["final"]
-                self.assertGreaterEqual(final["alive"], 1050)
-                # V0.5 人口过程会在任意月份产生年龄/饥饿死亡；验收线改为
-                # “无大规模饥荒”（月死亡率 < 1%），不再要求恰好 0 死亡。
-                self.assertLess(final["death_rate"], 0.01)
+                self.assertGreaterEqual(final["alive"], 1300)
+                # 不看最后一个月：饥荒可能发生在中段后恢复。
+                self.assertEqual(result["hunger_deaths"], 0)
+                self.assertLess(
+                    max(stat["death_rate"] for stat in result["stats"]),
+                    0.01,
+                )
                 self.assertLessEqual(
                     final["prices"][Good.FOOD.value], initial_food * 4.0
                 )
-                # 核心行业月产出为 0 的“行业-月”占比 <15%。
-                # V0.5 人口/儿童消费改变了需求结构，古典 60 月建筑零产出
-                # 约 24/60（12%）；仍要求其余核心行业和人口稳定。
+                # 核心行业月产出为 0 的“行业-月”占比 <10%。
+                # V0.5 修复粮食救济缓冲后，古典 60 月零产出回落到约 6–7%；
+                # 不能再用 15% 的松阈值掩盖供给/需求结构回归。
                 zero_share = result["zero_total"] / (60 * len(CORE))
-                self.assertLess(zero_share, 0.15, msg=result["zero_months"])
+                self.assertLess(zero_share, 0.10, msg=result["zero_months"])
 
 
 if __name__ == "__main__":

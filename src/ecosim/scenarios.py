@@ -231,6 +231,13 @@ def build_scenario_1(
         """
         min_year = demo.initial_age_min_months // 12
         max_year = demo.initial_age_max_months // 12
+        # 初始劳动人口不应在退休年龄以上：LATE_CAPITALISM 的
+        # initial_age_max_years=70、退休 67，若不封顶会创建 66 名
+        # “已到退休年龄但仍占企业岗位”的工人，首月才退休。
+        if demo.retirement_age_months > 0:
+            max_year = min(
+                max_year, demo.retirement_age_months // 12 - 1
+            )
         years = list(range(min_year, max_year + 1))
         scale = max(5.0, 0.8 * config.life_expectancy_years)
         weights = [math.exp(-year / scale) for year in years]

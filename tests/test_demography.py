@@ -93,6 +93,12 @@ class InitialPopulationTests(unittest.TestCase):
             CLASSICAL_LAISSEZ_FAIRE.fertility_monthly,
         )
         self.assertGreaterEqual(sum(1 for w in engine.workers.values() if w.retired), 1)
+        # 初始在业劳动人口不能在退休年龄（67）以上。
+        for worker in engine.workers.values():
+            if worker.alive and not worker.is_child and not worker.retired:
+                self.assertLess(
+                    worker.age_months, 67 * 12, msg=worker.id
+                )
         self.assertIsNotNone(engine.government)
         self.assertAlmostEqual(
             engine.government.pension_replacement, 0.55
@@ -212,6 +218,93 @@ class IndividualDemographyTests(unittest.TestCase):
         self.assertAlmostEqual(children[0].cash, 2.5, places=9)
         self.assertAlmostEqual(children[1].cash, 2.5, places=9)
 
+    def test_adult_child_is_not_counted_as_orphan(self):
+        engine = self.make_engine()
+        parent = engine.create_worker(
+            Industry.SERVICE, age_months=60 * 12, sex="F"
+        )
+        adult = engine.create_worker(
+            Industry.SERVICE,
+            age_months=20 * 12,
+            sex="M",
+            is_child=False,
+            parent_id=parent.id,
+        )
+        parent.children_ids.append(adult.id)
+        engine._kill_worker(parent)
+        self.assertEqual(engine._orphaned_this_month, 0)
+        self.assertIsNone(adult.parent_id)
+
+    def test_dead_farmer_land_passes_to_adult_child(self):
+        engine = self.make_engine()
+        farmer = engine.create_worker(
+            Industry.AGRICULTURE, age_months=60 * 12, sex="M"
+        )
+        child = engine.create_worker(
+            Industry.SERVICE,
+            age_months=20 * 12,
+            sex="M",
+            is_child=False,
+            parent_id=farmer.id,
+        )
+        farmer.children_ids.append(child.id)
+        farmer.is_owner_operator = True
+        farmer.land_owned = 10.0
+        engine.land.owners[farmer.id] = 10.0
+        enterprise = engine.create_enterprise(
+            Industry.AGRICULTURE,
+            owner_id=farmer.id,
+            cash=100.0,
+            land=10.0,
+            is_household=True,
+        )
+        enterprise.workers.append(farmer.id)
+        farmer.employer_id = enterprise.id
+        engine.land.enterprise_by_owner[farmer.id] = enterprise.id
+        estate_before = engine.land.estate_land
+
+        engine._kill_worker(farmer)
+
+        self.assertTrue(enterprise.active)
+        self.assertEqual(enterprise.owner_id, child.id)
+        self.assertEqual(child.employer_id, enterprise.id)
+        self.assertTrue(child.is_owner_operator)
+        self.assertAlmostEqual(engine.land.owners[child.id], 10.0)
+        self.assertNotIn(farmer.id, engine.land.owners)
+        self.assertEqual(engine.land.estate_land, estate_before)
+        self.assertEqual(engine._orphaned_this_month, 0)
+
+    def test_dead_farmer_land_goes_to_landless_worker_without_heir(self):
+        engine = self.make_engine()
+        farmer = engine.create_worker(
+            Industry.AGRICULTURE, age_months=60 * 12, sex="M"
+        )
+        farmer.is_owner_operator = True
+        farmer.land_owned = 10.0
+        engine.land.owners[farmer.id] = 10.0
+        enterprise = engine.create_enterprise(
+            Industry.AGRICULTURE,
+            owner_id=farmer.id,
+            cash=100.0,
+            land=10.0,
+            is_household=True,
+        )
+        enterprise.workers.append(farmer.id)
+        farmer.employer_id = enterprise.id
+        engine.land.enterprise_by_owner[farmer.id] = enterprise.id
+        landless = engine.create_worker(
+            Industry.SERVICE, age_months=30 * 12, sex="M", cash=0.0
+        )
+        estate_before = engine.land.estate_land
+
+        engine._kill_worker(farmer)
+
+        self.assertTrue(enterprise.active)
+        self.assertEqual(enterprise.owner_id, landless.id)
+        self.assertTrue(landless.is_owner_operator)
+        self.assertAlmostEqual(engine.land.owners[landless.id], 10.0)
+        self.assertEqual(engine.land.estate_land, estate_before)
+
     def test_death_clears_family_and_employer(self):
         engine = Engine(seed=1)
         mother = engine.create_worker(
@@ -265,6 +358,9 @@ class PensionAccountingTests(unittest.TestCase):
         retiree.cloth = 0.0
         retiree.housing = 0.0
         before_money = engine.total_money()
+        # PAYG 缴费在发薪时代扣；先发工资，再做政府结算。
+        engine._pay_wages()
+        engine._pay_government_wages()
         engine._government_settlement()
         self.assertGreater(gov.pension_contributions, 0.0)
         self.assertGreater(gov.pension_spending, 0.0)
@@ -293,6 +389,75 @@ class PensionAccountingTests(unittest.TestCase):
             places=6,
         )
 
+    def test_owner_operator_receives_pension_without_retiring(self):
+        engine = Engine(seed=1)
+        build_scenario_1(engine, config=KEYNESIAN_WELFARE)
+        engine._monthly_mortality = lambda worker: 0.0  # type: ignore[method-assign]
+        farmer = next(
+            worker
+            for worker in engine.workers.values()
+            if worker.alive and worker.is_owner_operator
+        )
+        farmer.age_months = engine.demographics.retirement_age_months - 1
+        engine.step()
+        self.assertFalse(farmer.retired)
+        self.assertTrue(farmer.is_owner_operator)
+        self.assertGreater(farmer.pension_income, 0.0)
+        self.assertGreaterEqual(engine.stats[-1]["pension_recipients"], 1)
+
+    def test_late_capitalism_pension_month_conserves_money(self):
+        """LATE_CAPITALISM 90 个月：金本位货币守恒 + 基金恒等式。"""
+        engine = Engine(seed=1)
+        build_scenario_1(engine, config=LATE_CAPITALISM)
+        for _ in range(90):
+            stat = engine.step()
+            self.assertGreaterEqual(stat["pension_fund"], -1e-9)
+            self.assertGreaterEqual(stat["pension_fund_unfunded"], 0.0)
+            self.assertAlmostEqual(
+                stat["money_total"], engine.money_initial, places=2
+            )
+            self.assertAlmostEqual(
+                stat["pension_revenue"],
+                stat["pension_contributions"] + stat["pension_subsidy"],
+                places=6,
+            )
+            self.assertAlmostEqual(
+                stat["pension_balance"],
+                stat["pension_revenue"] - stat["pension_spending"],
+                places=6,
+            )
+        self.assertGreater(
+            sum(stat["pension_contributions"] for stat in engine.stats),
+            0.0,
+        )
+
+    def test_forced_pension_subsidy_conserves_money(self):
+        """强制基金/现金为 0，覆盖 pension_subsidy 融资分支。"""
+        engine = Engine(seed=1)
+        build_scenario_1(engine, config=LATE_CAPITALISM)
+        gov = engine.government
+        gov.cash = 0.0
+        gov.pension_fund = 0.0
+        before_money = engine.total_money()
+        engine._government_settlement()
+        self.assertGreater(gov.pension_subsidy, 0.0)
+        self.assertAlmostEqual(engine.total_money(), before_money, places=2)
+        self.assertAlmostEqual(
+            gov.pension_revenue,
+            gov.pension_contributions + gov.pension_subsidy,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            gov.pension_balance,
+            gov.pension_revenue - gov.pension_spending,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            gov.pension_fund,
+            gov.pension_revenue - gov.pension_spending,
+            places=6,
+        )
+
     def test_fund_identity_and_nonnegative_fund_over_months(self):
         engine = Engine(seed=1)
         build_scenario_1(engine, config=KEYNESIAN_WELFARE)
@@ -309,6 +474,11 @@ class PensionAccountingTests(unittest.TestCase):
                 places=6,
             )
             self.assertAlmostEqual(
+                stat["pension_revenue"],
+                stat["pension_contributions"] + stat["pension_subsidy"],
+                places=6,
+            )
+            self.assertAlmostEqual(
                 stat["pension_balance"],
                 stat["pension_revenue"] - stat["pension_spending"],
                 places=9,
@@ -322,6 +492,22 @@ class PopulationStatisticsTests(unittest.TestCase):
         stat = engine._record_stats()
         self.assertEqual(stat["alive"], stat["population"])
         self.assertEqual(stat["labor_force"], stat["working_age"])
+        # 独立从 worker 标志重算，避免只比较同一份实现派生出的字段。
+        expected_labor_force = sum(
+            1
+            for worker in engine.workers.values()
+            if worker.alive and not worker.is_child and not worker.retired
+        )
+        expected_unemployed = sum(
+            1
+            for worker in engine.workers.values()
+            if worker.alive and worker.is_working_age and not worker.employed
+        )
+        self.assertEqual(stat["labor_force"], expected_labor_force)
+        self.assertEqual(stat["unemployed"], expected_unemployed)
+        for worker in engine.workers.values():
+            if worker.alive and (worker.is_child or worker.retired):
+                self.assertFalse(worker.employed)
         self.assertEqual(
             stat["unemployed"], stat["labor_force"] - stat["employed"]
         )
@@ -330,9 +516,20 @@ class PopulationStatisticsTests(unittest.TestCase):
             stat["unemployed"] / max(1, stat["labor_force"]),
             places=9,
         )
+        # 总抚养比含儿童和退休者，分母统一为劳动年龄人口。
         self.assertAlmostEqual(
             stat["dependency_ratio"],
-            stat["retirees"] / max(1, stat["employed"]),
+            (stat["children"] + stat["retirees"]) / max(1, stat["labor_force"]),
+            places=9,
+        )
+        self.assertAlmostEqual(
+            stat["old_age_dependency"],
+            stat["retirees"] / max(1, stat["labor_force"]),
+            places=9,
+        )
+        self.assertAlmostEqual(
+            stat["child_dependency"],
+            stat["children"] / max(1, stat["labor_force"]),
             places=9,
         )
         self.assertEqual(
@@ -346,6 +543,21 @@ class PopulationStatisticsTests(unittest.TestCase):
         self.assertGreaterEqual(stat["pension_fund"], 0.0)
 
 
+class FoodReliefTests(unittest.TestCase):
+    def test_classical_sixty_months_has_no_famine_and_keeps_reserve(self):
+        """高价时粮商不能把救济库存卖空；60 月古典不应出现饥饿死亡。
+
+        回归场景：V0.5 初版粮商按高价无限释放库存，粮商库存归零后
+        粮食救济无粮可发，60 月古典/Keynesian/MMT 分别累计 112/63/122
+        例饥饿死亡。保留救济缓冲后应降到 0。
+        """
+        engine = run(CLASSICAL_LAISSEZ_FAIRE, 60)
+        hunger = sum(stat["hunger_deaths"] for stat in engine.stats)
+        self.assertEqual(hunger, 0)
+        need = engine.feeding_units() * FOOD_PER_WORKER
+        self.assertGreaterEqual(engine.food_reserve.food, need)
+
+
 class StabilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -357,15 +569,29 @@ class StabilityTests(unittest.TestCase):
     def test_240_month_population_stays_in_sustainable_range(self):
         for name, engine in self.runs.items():
             final = engine.stats[-1]
-            self.assertGreater(final["population"], 200, msg=name)
-            self.assertLess(final["population"], 4000, msg=name)
+            # 初始人口 1350–1400；240 月应保持在 0.7×–1.6× 初始区间，
+            # 而不是旧断言的“>200 即可”（那允许人口崩溃 85%）。
+            self.assertGreater(final["population"], 900, msg=name)
+            self.assertLess(final["population"], 2400, msg=name)
             self.assertGreater(final["labor_force"], 0, msg=name)
-            self.assertGreaterEqual(final["children"], 0, msg=name)
-            self.assertGreaterEqual(final["retirees"], 0, msg=name)
+            # 儿童/退休者必须仍然存在，不能只用 >=0 的同义反复。
+            self.assertGreater(final["children"], 0, msg=name)
+            if name != "classical":
+                self.assertGreater(final["retirees"], 0, msg=name)
             total_births = sum(stat["births"] for stat in engine.stats)
             total_deaths = sum(stat["deaths"] for stat in engine.stats)
             self.assertGreater(total_births, 0, msg=name)
             self.assertGreater(total_deaths, 0, msg=name)
+            last_year_births = sum(
+                stat["births"] for stat in engine.stats[-12:]
+            )
+            self.assertGreater(last_year_births, 0, msg=name)
+            # 救济缓冲修复后，240 月四剧本都不应有饥饿死亡。
+            self.assertEqual(
+                sum(stat["hunger_deaths"] for stat in engine.stats),
+                0,
+                msg=name,
+            )
             self.assertGreaterEqual(final["pension_fund"], 0.0, msg=name)
             self.assertGreaterEqual(final["money_total"] + 1e-6, 0.0, msg=name)
 
