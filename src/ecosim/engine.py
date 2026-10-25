@@ -151,6 +151,10 @@ class Engine:
         self._zero_output_streak: Dict[str, int] = defaultdict(int)
         self._last_manual_entry: Dict[Industry, int] = {}
         self._warnings: List[str] = []
+        # 性能缓存：工资报价的失业率快照（每月劳动市场开头算一次），
+        # 以及 average_wage 的月内缓存（工资变化时显式失效）。
+        self._wage_unemployment: Optional[float] = None
+        self._average_wage_cache: Optional[float] = None
 
     # ------------------------------------------------------------------
     # 身份 / 查询辅助
@@ -204,6 +208,8 @@ class Engine:
         ]
 
     def average_wage(self) -> float:
+        if self._average_wage_cache is not None:
+            return self._average_wage_cache
         wages = [
             w.wage
             for w in self.workers.values()
@@ -213,7 +219,9 @@ class Engine:
             and not w.retired
             and w.wage > 0
         ]
-        return sum(wages) / len(wages) if wages else WAGE_BASE
+        value = sum(wages) / len(wages) if wages else WAGE_BASE
+        self._average_wage_cache = value
+        return value
 
     def feeding_units(self) -> float:
         """食品需求当量：儿童按 0.5 个成人计算。"""
@@ -487,6 +495,8 @@ class Engine:
         self._food_levy_this_month = 0.0
         self._household_farm_liquidations_this_month = 0
         self._warnings = []
+        self._wage_unemployment = None
+        self._average_wage_cache = None
         self.production_month = {g: 0.0 for g in Good}
         for enterprise in self.enterprises.values():
             enterprise.reset_month_flows()
@@ -953,6 +963,15 @@ class Engine:
     def _labor_market(self) -> None:
         prices = self.market.reference_prices
         floor = wage_floor(prices) * getattr(self, "wage_floor_scale", 1.0)
+        # 工资曲线用的失业率在本月招聘前算一次，供所有企业的
+        # enterprise_wage_offer 复用；否则每家企业都会全量扫描劳动力。
+        labor_force = self.labor_force_workers()
+        employed_count = sum(
+            1 for worker in labor_force if worker.employed
+        )
+        self._wage_unemployment = 1.0 - employed_count / max(
+            1, len(labor_force)
+        )
         vacancies: Dict[str, int] = {}
         offers: Dict[str, float] = {}
         food_stock = sum(
@@ -1009,11 +1028,21 @@ class Engine:
                     if not w.is_owner_operator
                 ]
                 excess = len(workers) - target
+                fired = 0
                 for worker in removable[:excess]:
+                    if worker.employer_id == enterprise.id:
+                        fired += 1
                     worker.employer_id = None
                     worker.wage = 0.0
                     enterprise.workers.remove(worker.id)
                 workers = self.enterprise_workers(enterprise)
+                # 旧实现每家企业在报价前重新扫描失业率；这里用增量更新
+                # 保持同样的“前面企业已裁员”语义，同时避免 O(n²) 扫描。
+                if fired:
+                    employed_count = max(0, employed_count - fired)
+                    self._wage_unemployment = 1.0 - employed_count / max(
+                        1, len(labor_force)
+                    )
 
             offer = enterprise_wage_offer(self, enterprise)
             if food_security and enterprise.industry == Industry.AGRICULTURE:
@@ -1100,6 +1129,10 @@ class Engine:
         self._service_self_employment(prices)
         if self.government is not None and self.government.job_guarantee:
             self._job_guarantee()
+        # 劳动市场改变了工资；让后续投资/结算重新计算平均工资。
+        self._average_wage_cache = None
+        # 报价阶段结束；外部再调用 enterprise_wage_offer 时重新计算。
+        self._wage_unemployment = None
 
     def _hire(
         self,

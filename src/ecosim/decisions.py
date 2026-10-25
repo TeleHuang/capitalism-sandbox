@@ -63,9 +63,13 @@ def enterprise_wage_offer(engine: "Engine", enterprise: "Enterprise") -> float:
         engine, "wage_floor_scale", 1.0
     )
     offer = max(WAGE_BASE * getattr(engine, "wage_floor_scale", 1.0), floor)
-    labor_force = engine.labor_force_workers()
-    employed = sum(1 for worker in labor_force if worker.employed)
-    unemployment = 1.0 - employed / max(1, len(labor_force))
+    # `_labor_market` 在每月招聘前缓存一次失业率；否则每家企业都会
+    # 调用 labor_force_workers() 全量扫描，600+ 企业时是 O(n²)。
+    unemployment = getattr(engine, "_wage_unemployment", None)
+    if unemployment is None:
+        labor_force = engine.labor_force_workers()
+        employed = sum(1 for worker in labor_force if worker.employed)
+        unemployment = 1.0 - employed / max(1, len(labor_force))
     # 工资曲线：失业率高于 7% 时压低报价，低于 7% 时抬高。
     offer *= 1.0 + 0.5 * (0.07 - unemployment)
     if enterprise.last_revenue > 0 and enterprise.last_profit > 0:
