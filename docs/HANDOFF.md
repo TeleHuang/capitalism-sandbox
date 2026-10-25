@@ -12,9 +12,11 @@
   v0.5.2 家庭农场剩余收入修复 + 文档）
 - Python 版本：0.5.0
 - 测试：95 个全绿（88 + 7 家庭农场回归；分支 1049.3s，
-  主线合并后 1403.3s，seed=1）
+  主线合并后 1403.3s，seed=1）；D2 新增 2 个 dashboard tests 单独通过
+  （97 total targeted；D2 为 UI/API-only，未重跑 23 分钟全量）。
 - UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
-  （仍为 V0.4 面板；D2 人口面板待做）
+  （V0.5 人口面板已合并，`3833c23`；截图
+  `web/screenshots/v05-demography-keynesian-60.png`）
 - 已实现：V0.4 全部机制 + V0.5 个体年龄/性别/家庭、Gompertz 死亡、
   ASFR 生育、儿童 allowance/消费、退休、PAYG 养老金（发薪/经营所得代扣）、
   `LATE_CAPITALISM`、粮食救济缓冲、土地继承/无地承接、家庭农场剩余收入。
@@ -74,8 +76,10 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 3. **价格指导价 v2 + 人口/救济组合**：`feature/price-guidance` 已实现
    opt-in `guidance`（ADR 0005，v2 `7c1d949`，85 tests）；纯价格变体
    仍崩溃，家庭农场会计修复后需与人口/食品救济一起重测。
-4. **D2 驾驶舱人口面板**：人口金字塔、出生/死亡、抚养比、养老金收支；
-   `/api/run` 增加 demography 分组；时间轴支持 1200 月。
+4. **D2 驾驶舱人口面板（已完成 `3833c23`）**：4 张人口 KPI、人口金字塔、
+   出生/死亡、抚养比、养老金收支、三制度对比人口列；截图
+   `web/screenshots/v05-demography-*.png`。后续可加 1200 月时间轴与
+   detail 视图。
 5. **D3 剧本**：`IRON_AGE`、可选 `NEOLIBERAL`；`LATE_CAPITALISM` 已实现。
 6. **D5 百年仿真/长程修复**：20–100 seeds、长期负利润、剩余古典饥荒。
 7. **HTML 单文件发行版**：本地驾驶舱可用；单文件发行版仍需同步 V0.5。

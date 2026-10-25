@@ -1,5 +1,9 @@
 # 人口/退休金驾驶舱面板规格（V0.5）
 
+> **状态：已实现（D2，`3833c23`）**。`/api/run` 增加 demography 分组，
+> `web/v04` 增加人口 KPI、金字塔、出生/死亡、抚养比、养老金收支图；
+> 截图见 `web/screenshots/v05-demography-*.png`。以下为原始规格。
+>
 > 等 `feature/demography` 合并后，由 UI 代理在现有 `web/v04` 上加一块
 > “人口与代际”面板。数据必须来自同一份 `Engine.stats`，不得写死。
 

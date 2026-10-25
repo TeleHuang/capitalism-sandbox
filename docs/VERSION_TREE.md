@@ -28,6 +28,7 @@
 | `365aa93` | V0.5 人口/代际/退休金模块（cherry-pick 自 `feature/demography` `263e99f`） |
 | `7429a3b` | V0.5.1 救济/养老金/土地/统计修复（cherry-pick 自 `fix/demography-safety` `f797b37`，88 tests） |
 | `0e15fad` | V0.5.2 家庭农场所有者剩余索取者记账（cherry-pick 自 `fix/household-farm-income` `035c97f`，95 tests） |
+| `3833c23` | V0.5 D2 人口驾驶舱：人口 KPI/金字塔/出生死亡/抚养比/养老金 + API demography |
 
 ## Feature 分支
 

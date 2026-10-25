@@ -16,7 +16,7 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | D1 | 人口核心：年龄/性别/儿童/退休/出生/死亡/养老金/统计/测试 | **已完成**：`feature/demography` `263e99f` + `fix/demography-safety` `f797b37` + `fix/household-farm-income` `035c97f`；主线 `365aa93`/`7429a3b`/`0e15fad`；95 tests |
-| D2 | 驾驶舱人口面板：人口金字塔、出生/死亡、抚养比、养老金 | 待开始（D1 已就绪） |
+| D2 | 驾驶舱人口面板：人口金字塔、出生/死亡、抚养比、养老金 | **已完成** `3833c23`：KPI/金字塔/出生死亡/抚养比/养老金/对比列；截图 `web/screenshots/v05-demography-*.png` |
 | D3 | 剧本：IRON_AGE、LATE_CAPITALISM、可选 NEOLIBERAL | `LATE_CAPITALISM` 已完成；IRON_AGE/NEOLIBERAL 待做 |
 | D4 | 信贷冲击稳定器：LLR/贴现窗口、wage_arrears、食品券、冻结规则 | 设计完成（`docs/CREDIT_BACKSTOP_DESIGN.md`）；实现待做 |
 | D5 | 1200 月验证：人口不灭绝/不爆炸、养老金可持续、20 seeds 抽样 | 脚本已就绪；seed=1 已跑：MMT/晚期通过，古典/Keynesian 仍有长程饥荒 |
@@ -63,6 +63,17 @@
   921/974 → 813/813，但仍未消除（324–404 月需求/流动性危机）。
 - 已知长程问题：古典剩余饥荒；土地开垦未实现（需求文档要求“可由农机/
   人力扩张”，当前 `TOTAL_LAND_MU` 固定）；长期利润率接近零/负。
+
+## D2 结果（`3833c23`）
+
+- `/api/run` 新增 population/children/working_age/retirees/labor_force/
+  employed/births/deaths/抚养比/养老金等标量序列，以及
+  `demography.age_histogram` 年龄桶序列；
+- 驾驶舱新增 4 张人口 KPI、人口金字塔、出生/死亡、抚养比、养老金收支图；
+- 三制度对比表增加人口/抚养比/养老金基金列；版本号 V0.5；
+- `tests/test_dashboard.py` 2 个 payload/缺字段测试通过；
+- 截图：`web/screenshots/v05-demography-60.png`、
+  `v05-demography-keynesian-60.png`、`v05-demography-60-tall.png`。
 
 ## D3 剧本草案
 
