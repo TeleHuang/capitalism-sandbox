@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import unittest
 
+from tests._slow import slow
+
 from ecosim.config import (
     HOUSEHOLD_FARM_RESERVE,
     SERVICE_FIRM_RESERVE,
@@ -202,6 +204,7 @@ class ServiceSelfEmploymentUnchangedTests(unittest.TestCase):
         self.assertAlmostEqual(engine.total_money(), before_money, places=6)
 
 
+@slow
 class HouseholdFarmLongRunTests(unittest.TestCase):
     def test_240_month_classical_household_farms_survive_without_famine(self):
         engine = make_engine()

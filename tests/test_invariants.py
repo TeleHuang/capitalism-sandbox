@@ -15,6 +15,8 @@ import math
 import unittest
 from typing import Any, Dict, List
 
+from tests._slow import slow
+
 from ecosim.config import TOTAL_LAND_MU
 from ecosim.engine import Engine
 from ecosim.enums import Good
@@ -217,16 +219,7 @@ class InvariantTests(unittest.TestCase):
             self.runs["keynesian"].saw_positive_debt,
             msg="keynesian 60 月内没有出现企业债务，测试不具区分度",
         )
-        # 家庭农场不再为“给自己发工资”借债后，MMT 前 60 月可能完全
-        # 没有企业债务；用 240 月确认债务路径会出现，避免恒等式空转。
-        long_mmt = InvariantRun("mmt", months=240)
-        self.assertTrue(
-            long_mmt.saw_positive_debt,
-            msg="mmt 240 月内没有出现企业债务，测试不具区分度",
-        )
-        runs = dict(self.runs)
-        runs["mmt_240"] = long_mmt
-        for regime, run in runs.items():
+        for regime, run in self.runs.items():
             self.assertEqual(
                 run.violations["loans"],
                 [],
@@ -235,6 +228,21 @@ class InvariantTests(unittest.TestCase):
                     f"{run.max_loan_debt_gap}"
                 ),
             )
+
+    @slow
+    def test_mmt_debt_path_appears_within_240_months(self):
+        # 家庭农场不再为“给自己发工资”借债后，MMT 前 60 月可能完全
+        # 没有企业债务；240 月确认债务路径会出现，避免恒等式空转。
+        long_mmt = InvariantRun("mmt", months=240)
+        self.assertTrue(
+            long_mmt.saw_positive_debt,
+            msg="mmt 240 月内没有出现企业债务，测试不具区分度",
+        )
+        self.assertEqual(
+            long_mmt.violations["loans"],
+            [],
+            msg=f"mmt bank.loans 与 Σdebt 最大差异 {long_mmt.max_loan_debt_gap}",
+        )
 
     def test_government_budget_identity(self):
         for regime in ("keynesian", "mmt"):

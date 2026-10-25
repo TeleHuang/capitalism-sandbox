@@ -16,6 +16,8 @@ import math
 import unittest
 from typing import Any, Dict
 
+from tests._slow import SLOW_ENABLED, slow
+
 from ecosim.config import FOOD_PER_WORKER
 from ecosim.engine import Engine
 from ecosim.enums import Good, Industry
@@ -558,9 +560,12 @@ class FoodReliefTests(unittest.TestCase):
         self.assertGreaterEqual(engine.food_reserve.food, need)
 
 
+@slow
 class StabilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if not SLOW_ENABLED:
+            raise unittest.SkipTest("slow integration test")
         cls.runs = {
             name: run(config, 240) for name, config in REGIMES.items()
         }

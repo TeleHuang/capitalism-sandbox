@@ -122,6 +122,14 @@ cherry-pick 到 `v0.4-integration`；冲突时以测试和用户可见指标为�
 - 不直接改 `main`；不提交 API key/本地设置/临时产物。
 - 每完成一个阶段，更新本文件和 `docs/WORKSTREAM_V0.5.md`。
 - 用户看的中间产品必须有 UI；纯 CLI 只作为调试/验证。
+- **测试策略（避免“面向测试编程”）**：
+  - 默认 `python -m unittest discover -s tests -v` 只跑快速单元/60 月以内；
+    240/600/1200 月测试用 `@slow`（`tests/_slow.py`）门控，设置
+    `ECOSIM_SLOW_TESTS=1` 才跑。
+  - 长程验证优先用 `scripts/validate_v05.py`，不要让每个新功能复制一套
+    240/600 月测试。
+  - 新功能只加 1–3 个真正防回归的测试；开发中用定向测试，合并前跑一次
+    slow suite，不要每改一行就跑 5–20 分钟全量。
 
 ## 常用命令
 

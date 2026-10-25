@@ -25,13 +25,23 @@
 7. 运行：
    ```powershell
    $env:PYTHONPATH = "src"
+   # 默认快速套件：只跑单元/60 月以内；开发循环用这个
+   python -m unittest discover -s tests -v
+   # 慢速长程（240/600/1200 月）在合并前跑一次
+   $env:ECOSIM_SLOW_TESTS = "1"
    python -m unittest discover -s tests -v
    python -m ecosim --months 240 --seed 1
    ```
 
+   长程验证优先用 `scripts/validate_v05.py`，不要给每个新功能再复制一套
+   240/600 月集成测试；默认套件保持 <2 分钟。只有真正需要防止回归的
+   长程场景才加 `@slow`，并在合并前跑一次。
+
 ## 完成标准
 
-- [ ] `python -m unittest discover -s tests -v` 通过。
+- [ ] 快速套件 `python -m unittest discover -s tests -v` 通过。
+- [ ] 合并前跑一次慢速套件 `ECOSIM_SLOW_TESTS=1 python -m unittest discover -s tests -v`，
+      或至少跑相关的 `@slow` 用例 + `scripts/validate_v05.py`。
 - [ ] 固定随机种子下 240 个月运行完成，无异常。
 - [ ] 货币总量守恒（审计误差小于 0.01）。
 - [ ] 除非场景刻意不启用，核心行业不出现连续 3 个月零产出。

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from tests._slow import slow
+
 from ecosim.engine import Engine
 from ecosim.scenarios import build_scenario_1
 
@@ -56,6 +58,7 @@ class ScenarioTests(unittest.TestCase):
         # 初始粮食产出 120 吨、600 名农业工人（人均 0.20）。
         self.assertGreater(self.final["ag_productivity"], 0.21)
 
+    @slow
     def test_240_month_run_keeps_fertilizer_alive(self):
         engine = run(240)
         final = engine.stats[-1]
