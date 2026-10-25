@@ -71,7 +71,7 @@ python -m ecosim --months 240 --seed 1 --regime classical --price-regime free
 `band`（参考价 + 成本带）与 `markup_soft`（参考价 ±15% 软走廊）保留为
 显式旧制度/对照实验。V0.6 A+B 后 free 四剧本 240 月可存活、无饥饿、金本位
 货币守恒；classical free 仍有约 20% 失业（band 约 3%），这是需求/工资
-结构尚未完全闭合的问题，后续 A2/C 继续处理。
+结构尚未完全闭合的问题；A2 耐用品/土地兼并已实现，C 信贷反应函数继续处理。
 
 ## V0.6 工资—生产率与工时制度
 
@@ -116,11 +116,12 @@ web/release/ecosim-v06.html
 - 源码模块：`web/release/src/*.js`；构建：
   `node scripts/build_release_v06.mjs`（`--check` 检查无外部资源）。
 - 已实现：V0.4 核心机制、V0.6 收入依赖需求/肉类/服务吸收/工资—生产率/
-  8h/16h/默认 free 价格、V0.5 人口/PAYG 养老金；玩家 UI 含六边形城市地图
-  （中心 + 六行业地块，点击工厂打开面板）。
-- 未实现（后续 JS 分支）：A2 耐用品/废钢/土地兼并、C 完整信贷/央行反应函数。
-- 黄金对比：`node scripts/test_engine_v06.mjs`（11/11）与
-  `node scripts/compare_golden_v06.mjs --months=60|240`。
+  8h/16h/默认 free 价格、V0.5 人口/PAYG 养老金、A2 耐用品/废钢/土地兼并。
+- A2 默认开启；开始页可关闭以重放 A2 之前的 Python 迁移 oracle。
+- 玩家 UI 含六边形城市地图（中心 + 六行业地块，点击工厂打开面板）。
+- 未实现（后续 JS 分支）：C 完整信贷/央行反应函数。
+- 测试/对比：`node scripts/test_engine_v06.mjs [--slow]`（16/16）与
+  `node scripts/compare_golden_v06.mjs --months=60|240`（默认 A2 off）。
 - Python 仅作为迁移期黄金 oracle，不再新增功能。
 
 ## V0.4 本地驾驶舱（诊断/oracle）

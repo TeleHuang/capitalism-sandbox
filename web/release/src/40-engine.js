@@ -3,8 +3,8 @@
  *
  * This is the authoritative implementation. The former Python engine is kept
  * only as a migration oracle (scripts/export_golden_v06.py); nothing here
- * imports or executes Python. A2 durables and credit-regime extensions will
- * add methods/fields to this class instead of rewriting the loop.
+ * imports or executes Python. A2 durables are implemented in the same loop;
+ * credit-regime extensions will add methods/fields rather than rewriting it.
  */
 import {
   C, GOODS, INDUSTRIES, GOOD_LABELS, INITIAL_PRICES, SECTOR_PARAMS,
@@ -18,6 +18,7 @@ import {
   AssetPool, Bank, LandMarket,
   capacityAtSkillOne, desiredWorkers, equipmentCost, equipmentValue,
   inventoryValue, capitalValue, netWorth, produce, averageSkill,
+  retireEquipmentUnits,
 } from "./10-models.js";
 import { Government, POLICY_REGIMES, MONEY_REGIMES } from "./15-government.js";
 import {
@@ -27,7 +28,11 @@ import {
   agriculturalEntryRoi,
 } from "./20-decisions.js";
 import { Market } from "./30-market.js";
-import { runLandMarket } from "./35-land.js";
+import {
+  assignDurableTargets, durablePurchaseNeeds, durableSpendingCap,
+  resetHouseholdMonth, applyDurableWear,
+} from "./25-durables.js";
+import { runLandMarket, farmMaxPower } from "./35-land.js";
 
 function makeDemographics(overrides) {
   return Object.assign({
@@ -56,8 +61,10 @@ function makeDemographics(overrides) {
 }
 
 class Engine {
-  constructor(seed) {
+  constructor(seed, options) {
     this.seed = seed === undefined ? 1 : seed;
+    const opts = options || {};
+    this.durablesA2 = opts.durables === undefined ? true : !!opts.durables;
     this.rng = new PythonRandom(this.seed);
     this.demographicRng = new PythonRandom(this.seed + 1000003);
     this.tick = 0;
@@ -108,6 +115,7 @@ class Engine {
     this._foodReliefThisMonth = 0.0;
     this._foodReliefShortfall = 0.0;
     this._foodLevyThisMonth = 0.0;
+    this._householdSelfConsumptionThisMonth = 0.0;
     this._householdFarmLiquidationsThisMonth = 0;
     this.householdFarmLiquidationsTotal = 0;
     this.productionMonth = zeros();
@@ -119,6 +127,15 @@ class Engine {
     this._warnings = [];
     this._wageUnemployment = null;
     this._averageWageCache = null;
+    // A2 monthly accumulators.
+    this._equipmentRetiredThisMonth = 0.0;
+    this._scrapGeneratedEquipmentThisMonth = 0.0;
+    this._carRetiredThisMonth = 0.0;
+    this._scrapGeneratedCarThisMonth = 0.0;
+    this._idleEquipmentScrappedThisMonth = 0.0;
+    this._replacementDemandThisMonth = 0.0;
+    this._replacementProjectsStarted = 0;
+    this._scrapSupplyStock = 0.0;
     // Feature flags are exposed to the UI so the release never silently
     // claims parity for mechanics that are not shipped.
     this.features = Object.freeze({
@@ -127,7 +144,7 @@ class Engine {
       wagePriceV06: true,
       demographyV05: true,
       pensionV05: true,
-      durablesA2: false,
+      durablesA2: this.durablesA2,
       creditRegimeC: false,
     });
   }
@@ -319,9 +336,10 @@ class Engine {
     this._lastManualEntry.set(industry, this.tick);
     return true;
   }
-  _startProject(enterprise, equipmentKey, isNew, priority) {
+  _startProject(enterprise, equipmentKey, isNew, priority, isReplacement) {
     isNew = !!isNew;
     priority = !!priority;
+    isReplacement = !!isReplacement;
     let activeProjects = 0;
     for (const project of this.projects.values()) if (project.active) activeProjects += 1;
     if (!priority && activeProjects >= C.MAX_ACTIVE_PROJECTS) return false;
@@ -367,6 +385,7 @@ class Engine {
       createdTick: this.tick,
       buildMonths: et.buildMonths,
       isNewEnterprise: isNew,
+      isReplacement,
     });
     this.projects.set(project.id, project);
     enterprise.lastInvestTick = this.tick;
@@ -387,15 +406,25 @@ class Engine {
     this._foodReliefThisMonth = 0.0;
     this._foodReliefShortfall = 0.0;
     this._foodLevyThisMonth = 0.0;
+    this._householdSelfConsumptionThisMonth = 0.0;
     this._householdFarmLiquidationsThisMonth = 0;
     this._warnings = [];
     this._wageUnemployment = null;
     this._averageWageCache = null;
+    this._equipmentRetiredThisMonth = 0.0;
+    this._scrapGeneratedEquipmentThisMonth = 0.0;
+    this._carRetiredThisMonth = 0.0;
+    this._scrapGeneratedCarThisMonth = 0.0;
+    this._idleEquipmentScrappedThisMonth = 0.0;
+    this._replacementDemandThisMonth = 0.0;
+    this._replacementProjectsStarted = 0;
     this.productionMonth = zeros();
     for (const enterprise of this.enterprises.values()) enterprise.resetMonthFlows();
     if (this.government !== null) this.government.resetMonth();
+    if (this.durablesA2) this._resetHouseholdFlows();
     this._updateSkills();
     this._demographyPre();
+    if (this.durablesA2) this._ageEquipmentAndScrap();
     this._updateExpectationsAndPlans();
     if (this.bankIntermediation) this._bankIntermediation();
     this._laborMarket();
@@ -405,7 +434,9 @@ class Engine {
     this._produceGovernment();
     this._collectFoodReliefLevy();
     this._updatePriceBands();
+    if (this.durablesA2) this._updateScrapAnchor();
     runLandMarket(this);
+    if (this.durablesA2) this._scrapSupplyStock = this._sumScrapStock();
     this._investmentDecisions();
 
     this._submitSellOrders();
@@ -447,6 +478,62 @@ class Engine {
       if (!worker.alive || !worker.employed) continue;
       worker.skill = Math.min(C.SKILL_MAX, worker.skill + C.SKILL_GROWTH_PER_MONTH);
     }
+  }
+
+  _resetHouseholdFlows() {
+    for (const worker of this.workers.values()) {
+      if (worker.alive) resetHouseholdMonth(worker);
+    }
+    for (const capitalist of this.capitalists.values()) resetHouseholdMonth(capitalist);
+  }
+
+  /**
+   * Age every equipment vintage by one month. Expired units leave the
+   * equipment map exactly once and become scrap in the owning enterprise's
+   * inventory; replacement demand is recorded for the investment pass.
+   */
+  _ageEquipmentAndScrap() {
+    for (const enterprise of this.enterprises.values()) {
+      if (!enterprise.active || !enterprise.vintages.length) continue;
+      const expired = new Map();
+      for (const batch of enterprise.vintages) {
+        if (batch.quantity <= 1e-12) continue;
+        batch.monthsLeft -= 1;
+        if (batch.monthsLeft <= 1e-9) {
+          expired.set(batch.key, (expired.get(batch.key) || 0.0) + batch.quantity);
+        }
+      }
+      for (const [key, quantity] of expired) {
+        const result = retireEquipmentUnits(enterprise, key, quantity);
+        if (result.units <= 1e-12) continue;
+        enterprise.replacementDemand += result.units;
+        enterprise.replacementByKey[key] = (enterprise.replacementByKey[key] || 0.0) +
+          result.units;
+        this._equipmentRetiredThisMonth += result.units;
+        this._scrapGeneratedEquipmentThisMonth += result.scrap;
+        this._replacementDemandThisMonth += result.units;
+      }
+      enterprise.vintages = enterprise.vintages.filter((batch) => batch.quantity > 1e-12);
+    }
+  }
+
+  _updateScrapAnchor() {
+    const orePrice = this.market.referencePrices.iron_ore || 0.0;
+    this.market.priceAnchors.scrap = Math.max(C.PRICE_FLOOR, orePrice * C.SCRAP_PRICE_RATIO);
+  }
+
+  _sumScrapStock() {
+    let total = this.assetPool.inventory.scrap || 0.0;
+    for (const enterprise of this.enterprises.values()) {
+      if (enterprise.active) total += enterprise.inv("scrap");
+    }
+    for (const worker of this.workers.values()) {
+      if (worker.alive) total += Math.max(0.0, worker.scrap || 0.0);
+    }
+    for (const capitalist of this.capitalists.values()) {
+      total += Math.max(0.0, capitalist.scrap || 0.0);
+    }
+    return total;
   }
 
   // ------------------------------------------------------------------
@@ -640,6 +727,22 @@ class Engine {
   }
   _submitChildOrders(child, prices) {
     const demo = this.demographics;
+    if (this.durablesA2) {
+      assignDurableTargets(this, child, prices, Math.max(0.0, child.cash));
+      const durableNeeds = durablePurchaseNeeds(child, prices);
+      const targets = {
+        food: demo.childFood,
+        cloth: 0.0,
+        building: 0.0,
+        meat: 0.0,
+        service: 0.0,
+      };
+      this._submitBundleOrders(child, targets, prices, this.workerDemandScale, {
+        durableNeeds,
+        cashCap: Math.max(0.0, child.cash),
+      });
+      return;
+    }
     const targets = [
       ["food", demo.childFood, 1.05],
       ["cloth", demo.childCloth, 1.04],
@@ -878,7 +981,6 @@ class Engine {
     const demand = history.demand || 0.0;
     const supply = history.supply || 0.0;
     const unmet = history.unmet || 0.0;
-    if (demand <= 1e-9 || supply + 1e-9 >= demand || unmet <= 0.25) return;
     const price = prices.service || 0.0;
     const capacity = EQUIPMENT.get("service_t0").capacity;
     if (price * capacity < C.SERVICE_ENTRY_MIN_REVENUE) return;
@@ -888,8 +990,18 @@ class Engine {
         candidates.push(worker);
       }
     }
+    if (!candidates.length) return;
+    // A2 releases labour from agriculture/textiles/construction. When the
+    // service market is already supplied, allow a gradual low-wage self-
+    // employment buffer as long as service revenue is viable; otherwise the
+    // demand-deficient unemployed have no absorption path.
+    const slackEntry = this.durablesA2 && demand > 1e-9 &&
+      (this._wageUnemployment || 0.0) > 0.04;
+    if (!slackEntry && (demand <= 1e-9 || supply + 1e-9 >= demand || unmet <= 0.25)) return;
     candidates.sort((a, b) => (a.cash - b.cash) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    const target = Math.min(C.MAX_SERVICE_ENTRIES_PER_MONTH, Math.max(1, Math.ceil(unmet / Math.max(capacity, 1e-9))));
+    const target = slackEntry
+      ? Math.min(10, Math.max(1, Math.ceil(candidates.length * 0.03)))
+      : Math.min(C.MAX_SERVICE_ENTRIES_PER_MONTH, Math.max(1, Math.ceil(unmet / Math.max(capacity, 1e-9))));
     let created = 0;
     for (const worker of candidates) {
       if (created >= target || serviceFirms.length >= params.maxFirms) break;
@@ -1285,14 +1397,25 @@ class Engine {
     const rate = Math.min(0.25, 0.25 * (target - reserve.food) / target);
     if (rate <= 1e-9) return;
     let levied = 0.0;
+    let remainingTarget = Math.max(0.0, target - reserve.food);
     for (const enterprise of this.activeEnterprises("agriculture")) {
       const available = enterprise.inv("food");
       if (available <= 1e-9) continue;
-      const take = Math.min(available, enterprise.lastOutput * rate);
+      const take = this.durablesA2
+        // A2 farms can hold large inventories while current output is low
+        // (durable inventory smoothing). Levy stock as well as current output
+        // so the relief reserve does not starve next to full granaries.
+        ? Math.min(available, Math.max(enterprise.lastOutput * rate, available * rate),
+          remainingTarget)
+        : Math.min(available, enterprise.lastOutput * rate);
       if (take <= 1e-9) continue;
       enterprise.inventory.food = available - take;
       reserve.food += take;
       levied += take;
+      if (this.durablesA2) {
+        remainingTarget -= take;
+        if (remainingTarget <= 1e-9) break;
+      }
     }
     this._foodLevyThisMonth = levied;
   }
@@ -1335,8 +1458,64 @@ class Engine {
   _investmentDecisions() {
     let started = 0;
     for (const industry of Object.keys(MANUAL_EQUIPMENT)) {
-      if (!this.activeEnterprises(industry).length) {
+      const activeManual = this.activeEnterprises(industry);
+      const hasCapacity = activeManual.some((enterprise) =>
+        capacityAtSkillOne(enterprise) > 1e-9);
+      // A2 retirement can leave an industry with active shells but no
+      // productive equipment; allow a new manual workshop so the supply
+      // chain does not deadlock on expensive replacement capital.
+      if (!activeManual.length || (this.durablesA2 && !hasCapacity)) {
         this._bootstrapManualEntry(industry, MANUAL_EQUIPMENT[industry]);
+      }
+    }
+
+    // Replacement demand is honoured before expansion so an enterprise whose
+    // vintage just retired does not silently lose capacity for years.
+    if (this.durablesA2) {
+      const replacement = this.activeEnterprises()
+        .filter((enterprise) => (enterprise.replacementDemand || 0) > 0 &&
+          !(enterprise.industry === "agriculture" && enterprise.isHousehold))
+        .slice()
+        .sort((a, b) => (b.replacementDemand - a.replacementDemand) ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      for (const enterprise of replacement) {
+        if (started >= C.MAX_PROJECTS_PER_TICK) break;
+        let key = null;
+        if (enterprise.industry === "agriculture") {
+          const choice = bestEquipmentChoice(
+            this, enterprise.industry, Math.max(0.0, enterprise.cash - 100.0),
+            undefined, enterprise,
+          );
+          if (choice) key = choice.key;
+        }
+        if (!key) {
+          for (const [candidate, quantity] of Object.entries(enterprise.replacementByKey || {})) {
+            if (quantity > 1e-9) { key = candidate; break; }
+          }
+        }
+        if (!key) {
+          let bestCount = -1;
+          let bestCapacity = -1;
+          for (const [candidate, count] of enterprise.equipment) {
+            if (count <= 1e-9) continue;
+            const cap = EQUIPMENT.get(candidate).capacity;
+            if (count > bestCount || (count === bestCount && cap > bestCapacity)) {
+              key = candidate;
+              bestCount = count;
+              bestCapacity = cap;
+            }
+          }
+        }
+        if (!key) continue;
+        if (this._startProject(enterprise, key, false, true, true)) {
+          enterprise.replacementDemand = Math.max(0.0, enterprise.replacementDemand - 1.0);
+          const pending = enterprise.replacementByKey[key] || 0.0;
+          if (pending > 1e-9) {
+            enterprise.replacementByKey[key] = Math.max(0.0, pending - 1.0);
+          }
+          this._replacementProjectsStarted += 1;
+          started += 1;
+        }
       }
     }
 
@@ -1344,6 +1523,7 @@ class Engine {
       if (started >= C.MAX_PROJECTS_PER_TICK) break;
       if (!enterprise.equipment.size) continue;
       if (enterprise.industry === "agriculture" && enterprise.isHousehold) continue;
+      if (this.durablesA2 && enterprise.industry === "agriculture") continue;
       const outGood = SECTOR_PARAMS.get(enterprise.industry).output;
       if (enterprise.planRatio < 0.2 &&
           enterprise.inv(outGood) > 6.0 * Math.max(enterprise.demandForecast, 1e-9)) continue;
@@ -1388,6 +1568,7 @@ class Engine {
     const entryCandidates = [];
     for (const industry of INDUSTRIES) {
       if (industry === "agriculture") continue;
+      if (industry === "auto_factory" && !this.durablesA2) continue;
       const params = SECTOR_PARAMS.get(industry);
       if (this.activeEnterprises(industry).length >= params.maxFirms) continue;
       let choice;
@@ -1440,8 +1621,9 @@ class Engine {
     }
 
     const priority = {
-      machinery_factory: 0, steel_mill: 1, brick_factory: 2, construction: 3,
-      fertilizer_factory: 4, textile_mill: 5, coal_mine: 6, iron_mine: 7,
+      machinery_factory: 0, steel_mill: 1, auto_factory: 2, brick_factory: 3,
+      construction: 4, fertilizer_factory: 5, textile_mill: 6,
+      coal_mine: 7, iron_mine: 8,
     };
     const existing = this.activeEnterprises().slice().sort((a, b) => {
       const pa = priority[a.industry] ?? 99;
@@ -1462,13 +1644,21 @@ class Engine {
   // Orders
   // ------------------------------------------------------------------
   _submitSellOrders() {
+    const prices = this.market.referencePrices;
     for (const enterprise of this.activeEnterprises()) {
       const params = SECTOR_PARAMS.get(enterprise.industry);
       const quantity = enterprise.inv(params.output);
-      if (quantity <= 1e-9) continue;
-      const ask = enterpriseAskPrice(this, enterprise);
-      enterprise.askPrices[params.output] = ask;
-      this.market.submitSell(enterprise, params.output, quantity, ask);
+      if (quantity > 1e-9) {
+        const ask = enterpriseAskPrice(this, enterprise);
+        enterprise.askPrices[params.output] = ask;
+        this.market.submitSell(enterprise, params.output, quantity, ask);
+      }
+      if (this.durablesA2 && enterprise.industry !== "steel_mill") {
+        const scrap = enterprise.inv("scrap");
+        if (scrap > 1e-9) {
+          this.market.submitSell(enterprise, "scrap", scrap, (prices.scrap || 0.0) * 0.95);
+        }
+      }
     }
   }
   _householdStock(agent) {
@@ -1477,18 +1667,31 @@ class Engine {
       building: agent.housing, service: agent.service,
     };
   }
-  _submitBundleOrders(agent, targets, prices, scale) {
+  _submitBundleOrders(agent, targets, prices, scale, options) {
     scale = scale === undefined ? 1.0 : scale;
+    const opts = options || {};
+    const durableNeeds = opts.durableNeeds || null;
     const stock = this._householdStock(agent);
-    let cashLeft = Math.max(0.0, agent.cash || 0.0);
-    for (const good of ["food", "cloth", "building", "meat", "service"]) {
-      let need = Math.max(0.0, (targets[good] || 0.0) - (stock[good] || 0.0));
+    let cashLeft = opts.cashCap === undefined
+      ? Math.max(0.0, agent.cash || 0.0)
+      : Math.max(0.0, opts.cashCap || 0.0);
+    const goods = durableNeeds
+      ? ["food", "cloth", "building", "car", "meat", "service"]
+      : ["food", "cloth", "building", "meat", "service"];
+    for (const good of goods) {
+      let need;
+      if (durableNeeds && (good === "cloth" || good === "building" || good === "car")) {
+        need = Math.max(0.0, durableNeeds[good] || 0.0);
+      } else {
+        need = Math.max(0.0, (targets[good] || 0.0) - (stock[good] || 0.0));
+      }
       if (good !== "food") need *= Math.max(0.0, scale);
       if (need <= 1e-9 || cashLeft <= 1e-9) continue;
       let bidMult;
       if (good === "food") bidMult = stock.food < 0.05 ? 1.08 : 1.05;
       else if (good === "meat") bidMult = 1.03;
       else if (good === "service") bidMult = 1.02;
+      else if (good === "car") bidMult = 1.05;
       else bidMult = 1.04;
       const bid = (prices[good] ?? 1.0) * bidMult;
       const quantity = Math.min(need, cashLeft / Math.max(bid, 1e-9));
@@ -1516,19 +1719,61 @@ class Engine {
     const targets = demandTargets(budget, prices, this.demandConfig);
     worker.demandBudget = budget;
     worker.demandTargets = { ...targets };
+    if (this.durablesA2) {
+      assignDurableTargets(this, worker, prices, budget);
+      const durableNeeds = durablePurchaseNeeds(worker, prices);
+      this._submitBundleOrders(worker, targets, prices, this.workerDemandScale, {
+        durableNeeds,
+        cashCap: durableSpendingCap(worker),
+      });
+      return;
+    }
     this._submitBundleOrders(worker, targets, prices, this.workerDemandScale);
+  }
+  _capitalistBudget(capitalist) {
+    let budget = capitalistConsumptionBudget(
+      capitalist.cash, this.market.referencePrices,
+      C.CAPITALIST_MIN_CONSUMPTION, C.CAPITALIST_CONSUMPTION_RATE,
+      this.demandConfig,
+    );
+    if (this.durablesA2) {
+      const wealthBudget = Math.max(0.0, capitalist.cash) *
+        C.CAPITALIST_WEALTH_CONSUMPTION_RATE;
+      budget = Math.max(budget, wealthBudget);
+    }
+    return Math.min(Math.max(0.0, capitalist.cash), budget);
   }
   _submitGearyCapitalistOrders(capitalist, prices) {
     const scale = this.capitalistDemandScale;
-    let budget = capitalistConsumptionBudget(
-      capitalist.cash, prices, C.CAPITALIST_MIN_CONSUMPTION,
-      C.CAPITALIST_CONSUMPTION_RATE, this.demandConfig,
-    );
+    let budget = this._capitalistBudget(capitalist);
     budget = Math.min(Math.max(0.0, capitalist.cash), budget * Math.max(0.0, scale));
     const targets = demandTargets(budget, prices, this.demandConfig);
     capitalist.demandBudget = budget;
     capitalist.demandTargets = { ...targets };
+    if (this.durablesA2) {
+      assignDurableTargets(this, capitalist, prices, budget);
+      const durableNeeds = durablePurchaseNeeds(capitalist, prices);
+      this._submitBundleOrders(capitalist, targets, prices, 1.0, {
+        durableNeeds,
+        cashCap: durableSpendingCap(capitalist),
+      });
+      return;
+    }
     this._submitBundleOrders(capitalist, targets, prices);
+  }
+  _submitHouseholdScrapOrders(prices) {
+    if (!this.durablesA2) return;
+    const price = (prices.scrap || 0.0) * 0.95;
+    if (price <= 0.0) return;
+    for (const worker of this.workers.values()) {
+      if (!worker.alive) continue;
+      const quantity = Math.max(0.0, worker.scrap || 0.0);
+      if (quantity > 1e-9) this.market.submitSell(worker, "scrap", quantity, price);
+    }
+    for (const capitalist of this.capitalists.values()) {
+      const quantity = Math.max(0.0, capitalist.scrap || 0.0);
+      if (quantity > 1e-9) this.market.submitSell(capitalist, "scrap", quantity, price);
+    }
   }
   _submitHouseholdOrders() {
     const prices = this.market.referencePrices;
@@ -1544,6 +1789,7 @@ class Engine {
     for (const capitalist of this.capitalists.values()) {
       this._submitGearyCapitalistOrders(capitalist, prices);
     }
+    this._submitHouseholdScrapOrders(prices);
   }
   _submitInputOrders() {
     const prices = this.market.referencePrices;
@@ -1808,6 +2054,9 @@ class Engine {
     if (enterprise.land > 0) this.land.estateLand += enterprise.land;
     enterprise.inventory = zeros();
     enterprise.equipment = new Map();
+    enterprise.vintages.length = 0;
+    enterprise.replacementDemand = 0.0;
+    enterprise.replacementByKey = {};
     enterprise.land = 0.0;
     const loan = this.bank.loans.get(enterprise.id) || 0.0;
     this.bank.loans.delete(enterprise.id);
@@ -1840,6 +2089,9 @@ class Engine {
     }
     enterprise.inventory = zeros();
     enterprise.equipment = new Map();
+    enterprise.vintages.length = 0;
+    enterprise.replacementDemand = 0.0;
+    enterprise.replacementByKey = {};
     enterprise.serviceIdleMonths = 0;
   }
   _cleanupDormant() {
@@ -1959,6 +2211,9 @@ class Engine {
         if (enterprise.land > 0) this.land.estateLand += enterprise.land;
         enterprise.inventory = zeros();
         enterprise.equipment = new Map();
+    enterprise.vintages.length = 0;
+    enterprise.replacementDemand = 0.0;
+    enterprise.replacementByKey = {};
         enterprise.land = 0.0;
         enterprise.active = false;
       }
@@ -1972,7 +2227,132 @@ class Engine {
   // ------------------------------------------------------------------
   // Consumption / stats
   // ------------------------------------------------------------------
+  _consumeDurablesAndFlows() {
+    const demo = this.demographics;
+    const prices = this.market.referencePrices;
+    // Household farm owners may hold grain in the enterprise while having no
+    // cash (self-provisioning). Transfer physical grain to their own pantry
+    // before consumption; this is not a market sale and creates no money.
+    for (const enterprise of this.enterprises.values()) {
+      if (!enterprise.active || !this._isHouseholdFarm(enterprise)) continue;
+      let stock = enterprise.inv("food");
+      if (stock <= 1e-9) continue;
+      for (const workerId of enterprise.workers) {
+        if (stock <= 1e-9) break;
+        const worker = this.workers.get(workerId);
+        if (!worker || !worker.alive) continue;
+        const target = worker.isChild ? demo.childFood : C.FOOD_PER_WORKER;
+        const need = Math.max(0.0, target - worker.food);
+        if (need <= 1e-9) continue;
+        const take = Math.min(stock, need);
+        worker.food += take;
+        stock -= take;
+        this._householdSelfConsumptionThisMonth += take;
+      }
+      enterprise.inventory.food = stock;
+    }
+    for (const worker of this.workers.values()) {
+      if (!worker.alive) continue;
+      let foodTarget;
+      let meatTarget;
+      let serviceTarget;
+      let hungerTarget;
+      if (worker.isChild) {
+        foodTarget = demo.childFood;
+        meatTarget = 0.0;
+        serviceTarget = 0.0;
+        hungerTarget = demo.childFood;
+      } else {
+        let targets = worker.demandTargets;
+        if (!targets || !Object.keys(targets).length) {
+          const budget = consumptionBudget(
+            worker.cash, prices, this._workerIncomeProxy(worker), this.demandConfig,
+          );
+          targets = demandTargets(budget, prices, this.demandConfig);
+          worker.demandBudget = budget;
+          worker.demandTargets = { ...targets };
+        }
+        foodTarget = targets.food ?? C.FOOD_PER_WORKER;
+        meatTarget = targets.meat ?? 0.0;
+        serviceTarget = targets.service ?? C.SERVICE_PER_HOUSEHOLD;
+        hungerTarget = C.FOOD_PER_WORKER;
+        if ((worker.clothTargetStock || 0) <= 1e-9 ||
+            (worker.housingTargetStock || 0) <= 1e-9) {
+          assignDurableTargets(this, worker, prices, worker.demandBudget || 0.0);
+        }
+      }
+      worker.consumedFood = Math.min(worker.food, foodTarget);
+      worker.food -= worker.consumedFood;
+      worker.consumedMeat = Math.min(worker.meat, meatTarget);
+      worker.meat -= worker.consumedMeat;
+      worker.consumedService = Math.min(worker.service, serviceTarget);
+      worker.service -= worker.consumedService;
+      applyDurableWear(this, worker, prices);
+
+      if (worker.consumedFood + 1e-9 < 0.90 * hungerTarget) worker.hungerMonths += 1;
+      else worker.hungerMonths = 0;
+      if (worker.hungerMonths >= 3) {
+        const chance = Math.min(0.50, 0.08 + 0.08 * (worker.hungerMonths - 3));
+        if (this.rng.random() < chance) {
+          this._killWorker(worker, "hunger");
+          continue;
+        }
+      }
+      if (worker.isChild) {
+        worker.livingStandard = "child";
+        continue;
+      }
+      const clothRatio = (worker.clothTargetStock || 0) > 1e-9
+        ? worker.cloth / worker.clothTargetStock : 1.0;
+      const housingRatio = (worker.housingTargetStock || 0) > 1e-9
+        ? worker.housing / worker.housingTargetStock : 1.0;
+      const comfortFood = C.FOOD_PER_WORKER * C.COMFORT_MULTIPLIER;
+      if (worker.consumedFood + 1e-9 < C.FOOD_PER_WORKER) {
+        worker.livingStandard = "survival";
+      } else if (clothRatio + 1e-9 < 0.75 || housingRatio + 1e-9 < 0.75) {
+        worker.livingStandard = "subsistence";
+      } else if (worker.consumedFood + 1e-9 >= comfortFood &&
+                 clothRatio + 1e-9 >= 1.0 && housingRatio + 1e-9 >= 1.0 &&
+                 worker.cash >= C.COMFORT_SAVINGS) {
+        const leisureThreshold = Math.max(1, Math.round(worker.standardHours * 0.5));
+        if (worker.hours <= leisureThreshold && worker.cash >= C.LEISURE_SAVINGS) {
+          worker.livingStandard = "leisure";
+        } else worker.livingStandard = "comfort";
+      } else {
+        worker.livingStandard = "subsistence";
+      }
+    }
+
+    for (const capitalist of this.capitalists.values()) {
+      let targets = capitalist.demandTargets;
+      if (!targets || !Object.keys(targets).length) {
+        const budget = this._capitalistBudget(capitalist);
+        targets = demandTargets(budget, prices, this.demandConfig);
+        capitalist.demandBudget = budget;
+        capitalist.demandTargets = { ...targets };
+      }
+      if ((capitalist.clothTargetStock || 0) <= 1e-9 ||
+          (capitalist.housingTargetStock || 0) <= 1e-9) {
+        assignDurableTargets(this, capitalist, prices, capitalist.demandBudget || 0.0);
+      }
+      const foodTarget = targets.food ?? C.CAPITALIST_FOOD;
+      const meatTarget = targets.meat ?? 0.0;
+      const serviceTarget = targets.service ?? C.CAPITALIST_SERVICE;
+      capitalist.consumedFood = Math.min(capitalist.food, foodTarget);
+      capitalist.food -= capitalist.consumedFood;
+      capitalist.consumedMeat = Math.min(capitalist.meat, meatTarget);
+      capitalist.meat -= capitalist.consumedMeat;
+      capitalist.consumedService = Math.min(capitalist.service, serviceTarget);
+      capitalist.service -= capitalist.consumedService;
+      applyDurableWear(this, capitalist, prices);
+    }
+  }
+
   _consumeAndDemographics() {
+    if (this.durablesA2) {
+      this._consumeDurablesAndFlows();
+      return;
+    }
     const demo = this.demographics;
     const prices = this.market.referencePrices;
     for (const worker of this.workers.values()) {
@@ -2219,14 +2599,61 @@ class Engine {
     for (const good of BUNDLE) { consumptionQty[good] = 0.0; adultQty[good] = 0.0; targetSum[good] = 0.0; }
     let targetCount = 0;
     let demandBudgetSum = 0.0;
+    let carQty = 0.0;
+    let capitalistCarQty = 0.0;
+    // A2 durable aggregates (physical stocks / purchases, not money).
+    let durableAdults = 0;
+    let clothStockSum = 0.0;
+    let clothTargetSum = 0.0;
+    let clothingQualityWeighted = 0.0;
+    let clothWearSum = 0.0;
+    let clothPurchaseSum = 0.0;
+    let housingStockSum = 0.0;
+    let housingTargetSum = 0.0;
+    let housingWearSum = 0.0;
+    let housingPurchaseSum = 0.0;
+    let housingMaintenanceSum = 0.0;
+    let housingNewConstructionSum = 0.0;
+    let carStockSum = 0.0;
+    let carTargetSum = 0.0;
+    let carPurchaseSum = 0.0;
+    let carScrappedSum = 0.0;
     for (const worker of aliveWorkers) {
-      const quantities = {
-        food: worker.consumedFood, meat: worker.consumedMeat,
-        cloth: worker.consumedCloth, building: worker.consumedHousing,
-        service: worker.consumedService,
-      };
+      let quantities;
+      if (this.durablesA2) {
+        const purchases = worker.monthPurchases || {};
+        quantities = {
+          food: worker.consumedFood, meat: worker.consumedMeat,
+          cloth: purchases.cloth || 0.0, building: purchases.building || 0.0,
+          service: worker.consumedService,
+        };
+        carQty += purchases.car || 0.0;
+        clothStockSum += Math.max(0.0, worker.cloth || 0.0);
+        clothTargetSum += Math.max(0.0, worker.clothTargetStock || 0.0);
+        clothingQualityWeighted += Math.max(0.0, worker.cloth || 0.0) *
+          Math.max(0.0, worker.clothQuality || 1.0);
+        clothWearSum += Math.max(0.0, worker.clothWear || 0.0);
+        clothPurchaseSum += Math.max(0.0, purchases.cloth || 0.0);
+        housingStockSum += Math.max(0.0, worker.housing || 0.0);
+        housingTargetSum += Math.max(0.0, worker.housingTargetStock || 0.0);
+        housingWearSum += Math.max(0.0, worker.housingWear || 0.0);
+        housingPurchaseSum += Math.max(0.0, purchases.building || 0.0);
+        housingMaintenanceSum += Math.max(0.0, worker.housingMaintenancePaid || 0.0);
+        housingNewConstructionSum += Math.max(0.0, worker.housingNewConstruction || 0.0);
+        carStockSum += Math.max(0.0, worker.cars || 0.0);
+        carTargetSum += Math.max(0.0, worker.carTargetStock || 0.0);
+        carPurchaseSum += Math.max(0.0, purchases.car || 0.0);
+        carScrappedSum += Math.max(0.0, worker.carScrapped || 0.0);
+      } else {
+        quantities = {
+          food: worker.consumedFood, meat: worker.consumedMeat,
+          cloth: worker.consumedCloth, building: worker.consumedHousing,
+          service: worker.consumedService,
+        };
+      }
       for (const good of BUNDLE) consumptionQty[good] += quantities[good];
       if (worker.isChild) continue;
+      durableAdults += 1;
       for (const good of BUNDLE) adultQty[good] += quantities[good];
       const targets = worker.demandTargets;
       if (targets && Object.keys(targets).length) {
@@ -2240,10 +2667,34 @@ class Engine {
     const capitalistQty = {};
     for (const good of BUNDLE) capitalistQty[good] = 0.0;
     for (const capitalist of this.capitalists.values()) {
+      const purchases = capitalist.monthPurchases || {};
       capitalistQty.food += capitalist.consumedFood;
       capitalistQty.meat += capitalist.consumedMeat;
-      capitalistQty.cloth += capitalist.consumedCloth;
-      capitalistQty.building += capitalist.consumedHousing;
+      if (this.durablesA2) {
+        capitalistQty.cloth += purchases.cloth || 0.0;
+        capitalistQty.building += purchases.building || 0.0;
+        capitalistCarQty += purchases.car || 0.0;
+        clothStockSum += Math.max(0.0, capitalist.cloth || 0.0);
+        clothTargetSum += Math.max(0.0, capitalist.clothTargetStock || 0.0);
+        clothingQualityWeighted += Math.max(0.0, capitalist.cloth || 0.0) *
+          Math.max(0.0, capitalist.clothQuality || 1.0);
+        clothWearSum += Math.max(0.0, capitalist.clothWear || 0.0);
+        clothPurchaseSum += Math.max(0.0, purchases.cloth || 0.0);
+        housingStockSum += Math.max(0.0, capitalist.housing || 0.0);
+        housingTargetSum += Math.max(0.0, capitalist.housingTargetStock || 0.0);
+        housingWearSum += Math.max(0.0, capitalist.housingWear || 0.0);
+        housingPurchaseSum += Math.max(0.0, purchases.building || 0.0);
+        housingMaintenanceSum += Math.max(0.0, capitalist.housingMaintenancePaid || 0.0);
+        housingNewConstructionSum += Math.max(0.0, capitalist.housingNewConstruction || 0.0);
+        carStockSum += Math.max(0.0, capitalist.cars || 0.0);
+        carTargetSum += Math.max(0.0, capitalist.carTargetStock || 0.0);
+        carPurchaseSum += Math.max(0.0, purchases.car || 0.0);
+        carScrappedSum += Math.max(0.0, capitalist.carScrapped || 0.0);
+        durableAdults += 1;
+      } else {
+        capitalistQty.cloth += capitalist.consumedCloth;
+        capitalistQty.building += capitalist.consumedHousing;
+      }
       capitalistQty.service += capitalist.consumedService;
     }
     const totalQty = {};
@@ -2255,6 +2706,17 @@ class Engine {
     for (const good of BUNDLE) householdConsumptionValue += consumptionQty[good] * (prices[good] || 0.0);
     let totalConsumptionValue = 0.0;
     for (const good of BUNDLE) totalConsumptionValue += totalQty[good] * (prices[good] || 0.0);
+    const carSpending = (carQty + capitalistCarQty) * (prices.car || 0.0);
+    householdConsumptionValue += carQty * (prices.car || 0.0);
+    totalConsumptionValue += carSpending;
+    const carShare = totalConsumptionValue > 1e-9 ? carSpending / totalConsumptionValue : 0.0;
+    const clothStockPerAdult = durableAdults > 0 ? clothStockSum / durableAdults : 0.0;
+    const clothTargetPerAdult = durableAdults > 0 ? clothTargetSum / durableAdults : 0.0;
+    const housingStockPerAdult = durableAdults > 0 ? housingStockSum / durableAdults : 0.0;
+    const housingTargetPerAdult = durableAdults > 0 ? housingTargetSum / durableAdults : 0.0;
+    const carsPer100Adults = durableAdults > 0 ? carStockSum / durableAdults * 100.0 : 0.0;
+    const clothQualityAverage = clothStockSum > 1e-9
+      ? clothingQualityWeighted / clothStockSum : 1.0;
     const serviceEmployed = employed.filter((worker) => worker.industry === "service").length;
     const livestockEmployed = employed.filter((worker) => worker.industry === "livestock").length;
     const capitalistFarms = this.activeEnterprises("agriculture").filter((e) => !e.isHousehold).length;
@@ -2270,17 +2732,91 @@ class Engine {
       }
     }
 
+    // Equipment vintages / scrap / land consolidation aggregates.
+    const vintageBins = { "0-23": 0.0, "24-59": 0.0, "60-89": 0.0, "90-119": 0.0 };
+    let vintageUnits = 0.0;
+    let vintageAgeSum = 0.0;
+    let replacementDemand = 0.0;
+    let farmPowerTotal = 0.0;
+    let consolidatedFarms = 0;
+    let consolidatedLand = 0.0;
+    let capitalistFarmLand = 0.0;
+    let capitalistFarmCount = 0;
+    let scrapUsedSteel = 0.0;
+    let steelScrapOutput = 0.0;
+    let steelOreOutput = 0.0;
+    for (const enterprise of activeEnterprises) {
+      replacementDemand += Math.max(0.0, enterprise.replacementDemand || 0.0);
+      if (this.durablesA2) {
+        for (const batch of enterprise.vintages) {
+          if (batch.quantity <= 1e-12) continue;
+          const age = Math.max(0.0, C.EQUIPMENT_LIFETIME_MONTHS - batch.monthsLeft);
+          vintageUnits += batch.quantity;
+          vintageAgeSum += age * batch.quantity;
+          if (age < 24) vintageBins["0-23"] += batch.quantity;
+          else if (age < 60) vintageBins["24-59"] += batch.quantity;
+          else if (age < 90) vintageBins["60-89"] += batch.quantity;
+          else vintageBins["90-119"] += batch.quantity;
+        }
+      }
+      if (enterprise.industry === "agriculture" && !enterprise.isHousehold) {
+        capitalistFarmCount += 1;
+        capitalistFarmLand += enterprise.land;
+        const maxPower = farmMaxPower(enterprise);
+        for (const [key, count] of enterprise.equipment) {
+          if (count <= 1e-9 || !key.startsWith("farm_")) continue;
+          const et = EQUIPMENT.get(key);
+          if (et) farmPowerTotal += et.power * count;
+        }
+        if (maxPower + 1e-9 >= C.CONSOLIDATION_MIN_POWER) {
+          consolidatedFarms += 1;
+          consolidatedLand += enterprise.land;
+        }
+      }
+      if (enterprise.industry === "steel_mill") {
+        const used = enterprise.lastInputUsed || {};
+        scrapUsedSteel += used.scrap || 0.0;
+        if (enterprise.lastSteelRecipe === "scrap") steelScrapOutput += enterprise.lastOutput;
+        else steelOreOutput += enterprise.lastOutput;
+      }
+    }
+    const equipmentAverageAge = vintageUnits > 1e-9 ? vintageAgeSum / vintageUnits : 0.0;
+    const scrapGeneratedEquipment = this._scrapGeneratedEquipmentThisMonth;
+    const scrapGeneratedCar = this._scrapGeneratedCarThisMonth;
+    const scrapGenerated = scrapGeneratedEquipment + scrapGeneratedCar;
+    const scrapInventory = this.durablesA2 ? this._sumScrapStock() : 0.0;
+    const steelOutputTotal = steelScrapOutput + steelOreOutput;
+    const scrapRecipeShare = steelOutputTotal > 1e-9 ? steelScrapOutput / steelOutputTotal : 0.0;
+    const averageCapitalistFarmMu = capitalistFarmCount > 0
+      ? capitalistFarmLand / capitalistFarmCount : 0.0;
+    const landConsolidationShare = capitalistFarmLand > 1e-9
+      ? consolidatedLand / capitalistFarmLand : 0.0;
+    const durableSpending = clothPurchaseSum * (prices.cloth || 0.0) +
+      housingPurchaseSum * (prices.building || 0.0) +
+      carPurchaseSum * (prices.car || 0.0);
+    const durableAssetValue = clothStockSum * (prices.cloth || 0.0) +
+      housingStockSum * (prices.building || 0.0) +
+      carStockSum * (prices.car || 0.0);
+
     const moneyTotal = this.totalMoney();
     const fiat = this.government !== null && this.government.fiatMoney;
     if (!fiat && this.moneyInitial > 0 && Math.abs(moneyTotal - this.moneyInitial) > 0.01) {
       this._warnings.push(`货币漂移：${moneyTotal.toFixed(2)} != ${this.moneyInitial.toFixed(2)}`);
     }
     const zeroOutputStreak = {};
+    const autoFirmCount = this.activeEnterprises("auto_factory").length;
     for (const good of GOODS) {
       const price = prices[good];
       const initial = INITIAL_PRICES[good];
       if (price > initial * 10) this._warnings.push(`${GOOD_LABELS[good]} 价格高于初始价的 10 倍`);
       if (price < initial * 0.1) this._warnings.push(`${GOOD_LABELS[good]} 价格低于初始价的 0.1 倍`);
+      const skipZeroOutput = this.durablesA2 &&
+        (good === "scrap" || (good === "car" && autoFirmCount === 0));
+      if (skipZeroOutput) {
+        this._zeroOutputStreak.set(good, 0);
+        zeroOutputStreak[good] = 0;
+        continue;
+      }
       const output = this.productionMonth[good] || 0.0;
       if (output <= 1e-9) this._zeroOutputStreak.set(good, (this._zeroOutputStreak.get(good) || 0) + 1);
       else this._zeroOutputStreak.set(good, 0);
@@ -2419,6 +2955,7 @@ class Engine {
       policy_regime: government ? government.regime : "classical",
       money_regime: government ? government.moneyRegime : "gold",
       price_regime: this.priceRegime,
+      durables_a2: this.durablesA2,
       average_markup: activeEnterprises.reduce((sum, e) => sum + e.markup, 0.0) / Math.max(1, activeEnterprises.length),
       revenue: totalRevenue,
       input_costs: totalInputCosts,
@@ -2435,6 +2972,7 @@ class Engine {
       food_relief: this._foodReliefThisMonth,
       food_relief_unmet: this._foodReliefShortfall,
       food_levy: this._foodLevyThisMonth,
+      household_self_consumption: this._householdSelfConsumptionThisMonth,
       asset_pool_inventory_value: assetPoolInventoryValue,
       asset_pool_equipment_units: assetPoolEquipmentUnits,
       zero_output_streak: zeroOutputStreak,
@@ -2495,6 +3033,7 @@ class Engine {
       meat_share: budgetShares.meat,
       cloth_share: budgetShares.cloth,
       housing_share: budgetShares.housing,
+      car_share: carShare,
       service_spending_share: budgetShares.service,
       household_consumption_value: householdConsumptionValue,
       market_budget_shares: marketBudgetShares,
@@ -2502,6 +3041,7 @@ class Engine {
       market_food_total_share: marketBudgetShares.food_total,
       market_meat_share: marketBudgetShares.meat,
       market_service_spending_share: marketBudgetShares.service,
+      market_car_share: carShare,
       market_consumption_value: totalConsumptionValue,
       capitalist_meat_consumed: capitalistQty.meat,
       demand_targets: averageTargets,
@@ -2518,6 +3058,55 @@ class Engine {
       farm_machinery: farmMachinery,
       smallholder_land: this.land.smallholderLand,
       land_price: this.land.price,
+
+      // A2 durable household stocks and physical flows.
+      cloth_stock: clothStockSum,
+      cloth_target: clothTargetSum,
+      cloth_stock_per_adult: clothStockPerAdult,
+      cloth_target_per_adult: clothTargetPerAdult,
+      cloth_quality_index: clothQualityAverage,
+      cloth_wear: clothWearSum,
+      cloth_purchases: clothPurchaseSum,
+      housing_stock: housingStockSum,
+      housing_target: housingTargetSum,
+      housing_stock_per_adult: housingStockPerAdult,
+      housing_target_per_adult: housingTargetPerAdult,
+      housing_wear: housingWearSum,
+      housing_purchases: housingPurchaseSum,
+      housing_maintenance_spending: housingMaintenanceSum,
+      housing_new_construction: housingNewConstructionSum,
+      maintenance_spending: housingMaintenanceSum,
+      car_stock: carStockSum,
+      car_target: carTargetSum,
+      cars_per_100_adults: carsPer100Adults,
+      car_purchases: carPurchaseSum,
+      car_scrapped: carScrappedSum,
+      durable_spending: durableSpending,
+      durable_asset_value: durableAssetValue,
+
+      // A2 equipment vintages / scrap / steel recipe / land consolidation.
+      equipment_retired_units: this._equipmentRetiredThisMonth,
+      equipment_average_age_months: equipmentAverageAge,
+      equipment_vintage_bins: vintageBins,
+      equipment_vintage_units: vintageUnits,
+      replacement_demand_units: replacementDemand,
+      replacement_projects: this._replacementProjectsStarted,
+      scrap_generated: scrapGenerated,
+      scrap_generated_equipment: scrapGeneratedEquipment,
+      scrap_generated_car: scrapGeneratedCar,
+      car_retired_units: this._carRetiredThisMonth,
+      idle_equipment_scrapped: this._idleEquipmentScrappedThisMonth,
+      scrap_inventory: scrapInventory,
+      scrap_price: prices.scrap || 0.0,
+      scrap_used_steel: scrapUsedSteel,
+      steel_scrap_output: steelScrapOutput,
+      steel_ore_output: steelOreOutput,
+      scrap_recipe_share: scrapRecipeShare,
+      farm_equipment_power: farmPowerTotal,
+      consolidated_farms: consolidatedFarms,
+      consolidated_land: consolidatedLand,
+      average_capitalist_farm_mu: averageCapitalistFarmMu,
+      land_consolidation_share: landConsolidationShare,
       warnings: this._warnings.slice(),
     };
     for (const good of GOODS) {

@@ -2,10 +2,11 @@
  * Replay the Python golden matrix through the JS engine and report deviations.
  *
  * Usage:
- *   node scripts/compare_golden_v06.mjs [--months=60] [--regime=classical] [--json=path]
+ *   node scripts/compare_golden_v06.mjs [--months=60] [--regime=classical] [--json=path] [--durables=on]
  *
- * The JS engine is the release source of truth; this script only measures how
- * far the first JS milestone has drifted from the migration oracle.
+ * The golden matrix predates A2, so by default this oracle comparison runs
+ * with durables off (the legacy V0.6 flow engine). Pass --durables=on to see
+ * how the A2 release deviates from the old Python oracle.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,6 +24,7 @@ const args = Object.fromEntries(process.argv.slice(2).map((arg) => {
 const golden = JSON.parse(fs.readFileSync(GOLDEN_PATH, "utf8"));
 const onlyMonths = args.months ? Number(args.months) : null;
 const onlyRegime = args.regime || null;
+const durables = args.durables === "on";
 
 const FIELDS = [
   "population", "gdp", "consumption", "investment", "unemployment_rate",
@@ -57,6 +59,7 @@ for (const run of golden.runs) {
     regime: run.regime,
     seed: run.seed,
     priceRegime: run.price_regime,
+    durables,
   });
   const samples = {};
   for (let month = 1; month <= run.months; month++) {
@@ -83,7 +86,7 @@ for (const run of golden.runs) {
     .filter((dev) => Number.isFinite(dev.dev))
     .sort((a, b) => Math.abs(b.dev) - Math.abs(a.dev));
   const final = rows[rows.length - 1];
-  console.log(`\n=== ${run.regime} · seed ${run.seed} · ${run.months}mo · ${((Date.now() - t0) / 1000).toFixed(1)}s ===`);
+  console.log(`\n=== ${run.regime} · seed ${run.seed} · ${run.months}mo · A2 ${durables ? "on" : "off"} · ${((Date.now() - t0) / 1000).toFixed(1)}s ===`);
   const headline = final.deviations.filter((dev) =>
     ["population", "gdp", "investment", "unemployment_rate", "profit_rate", "cpi", "average_wage", "money_total",
       "food_share", "service_spending_share", "price.food", "price.coal", "price.steel"].includes(dev.field));

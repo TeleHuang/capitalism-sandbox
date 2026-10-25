@@ -11,6 +11,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEngine } from "../web/release/src/50-scenarios.js";
+import { C } from "../web/release/src/00-core.js";
+import { produce } from "../web/release/src/10-models.js";
+import { farmTargetLand, sellIdleFarmEquipment } from "../web/release/src/35-land.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(ROOT, "web", "release", "src", "golden_v06.json"), "utf8"));
@@ -30,8 +33,8 @@ function test(name, fn) {
     console.error(`FAIL ${name}: ${error.message}`);
   }
 }
-function run(regime, months, seed = 1, priceRegime = "free") {
-  const { engine } = createEngine({ regime, seed, priceRegime });
+function run(regime, months, seed = 1, priceRegime = "free", options = {}) {
+  const { engine } = createEngine({ regime, seed, priceRegime, ...options });
   for (let month = 0; month < months; month++) engine.step();
   return engine;
 }
@@ -44,7 +47,7 @@ function finiteStat(stat) {
   for (const [key, value] of Object.entries(stat)) {
     if (typeof value === "number") assert.ok(Number.isFinite(value), `stat.${key} is not finite`);
   }
-  for (const good of ["food", "meat", "coal", "iron_ore", "steel", "brick", "cloth", "fertilizer", "machinery", "building", "service"]) {
+  for (const good of ["food", "meat", "coal", "iron_ore", "steel", "brick", "cloth", "fertilizer", "machinery", "building", "service", "car", "scrap"]) {
     assert.ok(Number.isFinite(stat.prices[good]) && stat.prices[good] > 0, `price ${good}`);
   }
   const shares = stat.market_budget_shares;
@@ -113,7 +116,7 @@ test("V0.6 demand / services / meat / free regime", () => {
     assert.equal(final.price_floors[good], 0, `free regime must not expose floors (${good})`);
     assert.equal(final.price_ceilings[good], 0, `free regime must not expose ceilings (${good})`);
   }
-  assert.equal(engine.features.durablesA2, false, "A2 must be explicitly deferred");
+  assert.equal(engine.features.durablesA2, true, "A2 durables should be on by default");
   assert.equal(engine.features.creditRegimeC, false, "C must be explicitly deferred");
 });
 
@@ -142,7 +145,7 @@ test("demography and PAYG pension hooks", () => {
 // ---------------------------------------------------------------------
 test("golden 60-month core-metric bands (all regimes)", () => {
   for (const runInfo of GOLDEN.runs.filter((item) => item.months === 60)) {
-    const engine = run(runInfo.regime, runInfo.months, runInfo.seed, runInfo.price_regime);
+    const engine = run(runInfo.regime, runInfo.months, runInfo.seed, runInfo.price_regime, { durables: false });
     const js = engine.stats.at(-1);
     const py = runInfo.samples[String(runInfo.months)];
     close(js.population, py.population, 0.02, `${runInfo.regime} population`);
@@ -161,7 +164,7 @@ test("golden 60-month core-metric bands (all regimes)", () => {
 test("golden 240-month core-metric bands (classical, keynesian)", () => {
   for (const runInfo of GOLDEN.runs.filter((item) => item.months === 240 &&
     ["classical", "keynesian"].includes(item.regime))) {
-    const engine = run(runInfo.regime, runInfo.months, runInfo.seed, runInfo.price_regime);
+    const engine = run(runInfo.regime, runInfo.months, runInfo.seed, runInfo.price_regime, { durables: false });
     const js = engine.stats.at(-1);
     const py = runInfo.samples[String(runInfo.months)];
     close(js.population, py.population, 0.03, `${runInfo.regime} population`);
@@ -174,7 +177,131 @@ test("golden 240-month core-metric bands (classical, keynesian)", () => {
 });
 
 // ---------------------------------------------------------------------
-// 4. Performance / invariants
+// 4. A2 durables / scrap / land consolidation
+// ---------------------------------------------------------------------
+test("A2: cloth/housing wear rates and car lifetime", () => {
+  const { engine } = createEngine({ regime: "classical", seed: 1, durables: true });
+  engine.step();
+  const worker = Array.from(engine.workers.values())
+    .find((item) => item.alive && !item.isChild && !item.retired);
+  assert.ok(worker, "expected an adult worker");
+  const purchasedCloth = worker.monthPurchases.cloth || 0.0;
+  const preCloth = worker.cloth + worker.clothWear - purchasedCloth;
+  assert.ok(Math.abs(worker.clothWear - Math.max(0.0, preCloth) * C.CLOTH_WEAR_RATE) < 1e-8,
+    "cloth wear must equal pre-purchase stock / 60");
+  const purchasedHousing = worker.monthPurchases.building || 0.0;
+  const preHousing = worker.housing + worker.housingWear - purchasedHousing;
+  assert.ok(Math.abs(worker.housingWear - Math.max(0.0, preHousing) * C.HOUSING_WEAR_RATE) < 1e-8,
+    "housing wear must equal pre-purchase stock / 600");
+  assert.ok(worker.clothTargetStock > 0 && worker.housingTargetStock > 0,
+    "soft durable stock targets should be set");
+
+  const carWorker = Array.from(engine.workers.values())
+    .find((item) => item.alive && !item.isChild && (item.cars || 0) <= 1e-9);
+  assert.ok(carWorker, "expected a worker without a car");
+  const scrapBefore = carWorker.scrap || 0.0;
+  carWorker.cars = 1.0;
+  carWorker.carBatches = [{ quantity: 1.0, monthsLeft: 2 }];
+  engine.step();
+  engine.step();
+  assert.ok(Math.abs(carWorker.cars) < 1e-9, "car should retire at end of 120-month lifetime");
+  assert.ok(carWorker.scrap >= scrapBefore + C.SCRAP_PER_CAR - 1e-9,
+    "retired car should yield scrap exactly once");
+});
+
+test("A2: equipment vintage retirement creates scrap and replacement demand", () => {
+  const { engine } = createEngine({ regime: "classical", seed: 1, durables: true });
+  const owner = Array.from(engine.capitalists.values())[0];
+  const enterprise = engine.createEnterprise({
+    industry: "machinery_factory", ownerId: owner.id,
+    cash: 10000.0, modernizationCapable: true,
+  });
+  enterprise.addEquipment("auto_t0", 1, C.EQUIPMENT_LIFETIME_MONTHS - 1);
+  const generatedBefore = enterprise.scrapGenerated || 0.0;
+  engine.step();
+  assert.ok(enterprise.equipmentCount("auto_t0") <= 1e-9, "expired vintage should leave equipment map");
+  const expectedScrap = 10.0 * C.SCRAP_PER_STEEL_GOOD;
+  assert.ok((enterprise.scrapGenerated || 0.0) >= generatedBefore + expectedScrap - 1e-9,
+    "equipment scrap should be generated once");
+  const replacementStarted = enterprise.replacementDemand >= 1.0 ||
+    engine.stats.at(-1).replacement_projects >= 1;
+  assert.ok(replacementStarted, "retirement should create replacement demand/project");
+  for (const [good, quantity] of Object.entries(enterprise.inventory)) {
+    assert.ok(quantity >= -1e-9, `${good} inventory must not be negative`);
+  }
+});
+
+test("A2: steel scrap recipe uses half coal and no negative inventories", () => {
+  const { engine } = createEngine({ regime: "classical", seed: 1, durables: true });
+  const mill = engine.activeEnterprises("steel_mill")[0];
+  assert.ok(mill, "expected a steel mill");
+  mill.planRatio = 1.0;
+  mill.inventory.iron_ore = 0.0;
+  mill.inventory.scrap = 100.0;
+  mill.inventory.coal = 100.0;
+  const scrap0 = mill.inv("scrap");
+  const coal0 = mill.inv("coal");
+  const output = produce(engine, mill);
+  assert.ok(output > 1e-9, "scrap route should produce steel");
+  assert.ok(Math.abs((scrap0 - mill.inv("scrap")) - output * 1.5) < 1e-6,
+    "scrap use must be 1.5 per steel");
+  assert.ok(Math.abs((coal0 - mill.inv("coal")) - output * 0.5) < 1e-6,
+    "scrap route must use half the coal of the ore route");
+  assert.ok(mill.inv("scrap") >= -1e-9 && mill.inv("coal") >= -1e-9);
+});
+
+test("A2: land consolidation raises farm target and retires surplus small machines as scrap", () => {
+  const { engine } = createEngine({ regime: "classical", seed: 1, durables: true });
+  const owner = Array.from(engine.capitalists.values())[0];
+  const enterprise = engine.createEnterprise({
+    industry: "agriculture", ownerId: owner.id, cash: 10000.0,
+    land: C.TARGET_CAPITALIST_FARM_MU, modernizationCapable: true,
+  });
+  enterprise.addEquipment("farm_t4", 1, 0);
+  enterprise.addEquipment("farm_t0", 2, 0);
+  assert.ok(farmTargetLand(enterprise) + 1e-9 >= C.CONSOLIDATED_FARM_MU,
+    "power >= 4 should permit a 200-mu consolidated farm");
+  const landBefore = enterprise.land;
+  const smallBefore = enterprise.equipmentCount("farm_t0");
+  const scrapBefore = enterprise.inv("scrap");
+  sellIdleFarmEquipment(engine);
+  assert.equal(enterprise.land, landBefore, "consolidation must not duplicate land");
+  assert.ok(enterprise.equipmentCount("farm_t0") < smallBefore,
+    "surplus small machinery should be sold/scrapped");
+  assert.ok(enterprise.inv("scrap") > scrapBefore, "sold small machinery should yield scrap");
+  const vintageSmall = enterprise.vintages
+    .filter((batch) => batch.key === "farm_t0")
+    .reduce((sum, batch) => sum + batch.quantity, 0.0);
+  assert.ok(Math.abs(vintageSmall - enterprise.equipmentCount("farm_t0")) < 1e-9,
+    "vintage quantities must match equipment counts");
+});
+
+test("A2: 60-month stock conservation, money conservation and no famine", () => {
+  const engine = run("classical", 60, 1, "free", { durables: true });
+  const final = engine.stats.at(-1);
+  assert.ok(Math.abs(final.money_total - engine.moneyInitial) < 0.01, "money drift");
+  assert.ok(engine.stats.reduce((sum, stat) => sum + stat.hunger_deaths, 0) === 0,
+    "A2 should not regress into famine at 60 months");
+  assert.ok(final.cloth_stock_per_adult > 0 && final.housing_stock_per_adult > 0,
+    "durable stocks should exist");
+  assert.ok(final.car_stock >= 0 && final.scrap_inventory >= 0, "car/scrap stocks nonnegative");
+  assert.ok(final.scrap_price > 0 && final.steel_scrap_output >= 0, "scrap market should be priced");
+  for (const enterprise of engine.enterprises.values()) {
+    if (!enterprise.active) continue;
+    for (const [good, quantity] of Object.entries(enterprise.inventory)) {
+      assert.ok(quantity >= -1e-9, `${enterprise.id}.${good} inventory negative`);
+    }
+  }
+  for (const worker of engine.workers.values()) {
+    if (!worker.alive) continue;
+    assert.ok(worker.cloth >= -1e-9 && worker.housing >= -1e-9 &&
+      worker.cars >= -1e-9 && (worker.scrap || 0) >= -1e-9,
+      "household durable stocks must not be negative");
+  }
+});
+
+// ---------------------------------------------------------------------
+// 5. Performance / invariants
 // ---------------------------------------------------------------------
 test("performance: 60-month classical run under 20 s", () => {
   const started = Date.now();
@@ -188,6 +315,11 @@ if (SLOW) {
     for (const regime of ["classical", "keynesian", "mmt", "late_capitalism"]) {
       const engine = run(regime, 240, 1);
       finiteStat(engine.stats.at(-1));
+      assert.ok(engine.stats.at(-1).population > 0, `${regime} population should survive 240 months`);
+      if (regime === "classical") {
+        assert.equal(engine.stats.reduce((sum, stat) => sum + stat.hunger_deaths, 0), 0,
+          "classical A2 must not regress into famine at 240 months");
+      }
     }
   });
 }

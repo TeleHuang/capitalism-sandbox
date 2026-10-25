@@ -14,42 +14,53 @@
   const GOODS = [
     "food", "meat", "coal", "iron_ore", "steel", "brick",
     "cloth", "fertilizer", "machinery", "building", "service",
+    "car", "scrap",
   ];
   const INDUSTRIES = [
     "agriculture", "livestock", "coal_mine", "iron_mine", "steel_mill",
-    "brick_factory", "textile_mill", "machinery_factory", "construction",
-    "fertilizer_factory", "service",
+    "brick_factory", "textile_mill", "machinery_factory", "auto_factory",
+    "construction", "fertilizer_factory", "service",
   ];
   const GOOD_LABELS = {
     food: "粮食", meat: "肉类", coal: "煤炭", iron_ore: "铁矿石",
     steel: "钢铁", brick: "砖头", cloth: "纺织品", fertilizer: "化肥",
     machinery: "机械", building: "建筑", service: "服务",
+    car: "汽车", scrap: "废钢",
   };
   const GOOD_UNITS = {
     food: "吨", meat: "吨", coal: "吨", iron_ore: "吨", steel: "吨",
     brick: "块", cloth: "件", fertilizer: "吨", machinery: "台",
-    building: "平方米", service: "单位",
+    building: "平方米", service: "单位", car: "辆", scrap: "吨",
   };
   const INDUSTRY_LABELS = {
     agriculture: "农业", livestock: "畜牧业", coal_mine: "煤矿",
     iron_mine: "铁矿", steel_mill: "炼钢厂", brick_factory: "砖窑",
     textile_mill: "纺织厂", machinery_factory: "机械厂",
-    construction: "建筑业", fertilizer_factory: "化肥厂",
+    auto_factory: "汽车厂", construction: "建筑业", fertilizer_factory: "化肥厂",
     service: "服务业",
   };
-  const CONSUMER_GOODS = new Set(["food", "meat", "cloth", "building", "service"]);
+  const CONSUMER_GOODS = new Set(["food", "meat", "cloth", "building", "service", "car"]);
   const CAPITAL_GOODS = new Set(["machinery", "brick", "steel"]);
 
   const INITIAL_PRICES = {
     food: 100.0, meat: 400.0, coal: 20.0, iron_ore: 30.0, steel: 150.0,
     brick: 10.0, cloth: 1.0, fertilizer: 50.0, machinery: 200.0,
-    building: 10.0, service: 10.0,
+    building: 10.0, service: 10.0, car: 800.0, scrap: 18.0,
   };
+
+  // Steel can be produced from iron ore (classic route) or scrap steel.
+  // The scrap route charges the same scrap-per-steel ratio as the ore route
+  // but only half the coal, mirroring the lower energy requirement of EAF-like
+  // remelting. Both recipes are real material balances: no good is created.
+  const STEEL_RECIPES = Object.freeze([
+    Object.freeze({ name: "ore", inputs: Object.freeze({ iron_ore: 1.5, coal: 1.0 }) }),
+    Object.freeze({ name: "scrap", inputs: Object.freeze({ scrap: 1.5, coal: 0.5 }) }),
+  ]);
 
   // -------------------------------------------------------------------
   // Calibration constants (src/ecosim/config.py). Kept in one frozen object
-  // so later A2 (durables) / C (credit) extensions can add fields without
-  // touching scattered literals.
+  // so A2 (durables) / C (credit) extensions add fields without touching
+  // scattered literals.
   // -------------------------------------------------------------------
   const C = Object.freeze({
     LIVESTOCK_FEED_PER_MEAT: 3.0,
@@ -151,6 +162,72 @@
     LAND_PER_WORKER_BASE: 10.0,
     FERTILIZER_COAL_BUFFER_MONTHS: 2.0,
     FERTILIZER_HIRING_PRIORITY: true,
+
+    // ------------------------------------------------------------------
+    // A2 durables / lifetimes / scrap / land consolidation
+    // ------------------------------------------------------------------
+    CLOTH_LIFETIME_MONTHS: 60.0,
+    HOUSING_LIFETIME_MONTHS: 600.0,
+    CAR_LIFETIME_MONTHS: 120.0,
+    EQUIPMENT_LIFETIME_MONTHS: 120.0,
+    CLOTH_WEAR_RATE: 1.0 / 60.0,
+    HOUSING_WEAR_RATE: 1.0 / 600.0,
+    // Desired stock targets are soft income functions (no hard "fully
+    // clothed" cutoff). They grow with real income; quality also improves.
+    // A target stock of roughly one lifetime of normal service flow makes
+    // steady-state replacement demand comparable to the old flow demand:
+    // 60 pieces of clothing / 60 months, and 120 m² / 600 months per adult.
+    // Both scale with income and quality; there is no hard clothes cutoff.
+    CLOTH_STOCK_BASE: 60.0,
+    CLOTH_STOCK_INCOME_GAIN: 20.0,
+    CLOTH_STOCK_CATCHUP_MONTHS: 24.0,
+    CLOTH_QUALITY_BASE: 0.80,
+    CLOTH_QUALITY_GAIN: 0.20,
+    CLOTH_QUALITY_MIN: 0.80,
+    CLOTH_QUALITY_MAX: 2.00,
+    HOUSING_STOCK_BASE: 120.0,
+    HOUSING_STOCK_INCOME_GAIN: 20.0,
+    HOUSING_STOCK_CATCHUP_MONTHS: 60.0,
+    HOUSING_PRODUCTIVITY_WEIGHT: 0.25,
+    // Cars are a rich-household durable; ownership grows with real income.
+    CAR_INCOME_THRESHOLD: 2.0,
+    CAR_INCOME_SLOPE: 0.50,
+    CAR_TARGET_MAX: 2.0,
+    CAR_CATCHUP_MONTHS: 24.0,
+    CAR_STEEL_PER_UNIT: 2.0,
+    // Rich households may draw on savings for durables (capitalists in the
+    // headless runs); workers mostly finance durables from current income.
+    DURABLE_SAVINGS_FLOOR: 1000.0,
+    DURABLE_SAVINGS_DRAWDOWN: 0.02,
+    // A2 rich-household consumption: a small share of capitalist wealth is
+    // spent each month on durables, housing and services. This is a transfer,
+    // not money creation, and prevents indefinite hoarding from starving the
+    // service/housing sectors of demand.
+    CAPITALIST_WEALTH_CONSUMPTION_RATE: 0.002,
+    INITIAL_CLOTH_STOCK_ADULT: 70.0,
+    INITIAL_HOUSING_STOCK_ADULT: 130.0,
+    INITIAL_CLOTH_STOCK_CHILD: 20.0,
+    INITIAL_HOUSING_STOCK_CHILD: 40.0,
+    INITIAL_CLOTH_STOCK_CAPITALIST: 90.0,
+    INITIAL_HOUSING_STOCK_CAPITALIST: 160.0,
+    INITIAL_CAR_OWNERS: 10,
+    INITIAL_CAR_AGE_MIN: 30,
+    INITIAL_CAR_AGE_SPAN: 90,
+    // Scrap recovery: equipment/cars are physical assets; retirement moves
+    // their metal content into the scrap good exactly once.
+    SCRAP_PER_CAR: 1.2,
+    SCRAP_PER_MACHINERY_GOOD: 0.6,
+    SCRAP_PER_STEEL_GOOD: 0.8,
+    SCRAP_PER_BRICK_GOOD: 0.005,
+    SCRAP_PRICE_RATIO: 0.60,
+    SCRAP_PRICE_ANCHOR_WEIGHT: 0.55,
+    INITIAL_SCRAP_PER_STEEL_MILL: 20.0,
+    // Land consolidation: mechanised capitalist farms can grow beyond the
+    // 100-mu baseline and retire surplus small machines as scrap.
+    CONSOLIDATED_FARM_MU: 200.0,
+    CONSOLIDATION_MIN_POWER: 4.0,
+    CONSOLIDATION_TARGET_WORKERS: 1.0,
+    FARM_IDLE_MIN_LAND: 100.0,
   });
 
   // -------------------------------------------------------------------
@@ -363,6 +440,7 @@
     ["brick", "brick_factory", "砖窑", 100.0, 50, "brick", 300.0, 600.0, 2],
     ["textile", "textile_mill", "织机", 50.0, 1, "machinery", 0.0, 5.0, 1],
     ["machinery", "machinery_factory", "机械工坊", 5.0, 10, "steel", 0.0, 20.0, 1],
+    ["auto", "auto_factory", "汽车装配线", 2.0, 10, "steel", 10.0, 10.0, 2],
     ["construction", "construction", "施工队", 50.0, 20, "machinery", 0.0, 3.0, 1],
     ["fertilizer", "fertilizer_factory", "反应炉", 20.0, 5, "machinery", 1.0, 2.0, 1],
     ["livestock", "livestock", "畜舍", 2.0, 5, "machinery", 1.0, 2.0, 2],
@@ -409,7 +487,8 @@
       agriculture: "farm", livestock: "livestock", coal_mine: "coal",
       iron_mine: "iron", steel_mill: "steel", brick_factory: "brick",
       textile_mill: "textile", machinery_factory: "machinery",
-      construction: "construction", fertilizer_factory: "fertilizer",
+      auto_factory: "auto", construction: "construction",
+      fertilizer_factory: "fertilizer",
     };
     const keys = industry === "service"
       ? ["service_t0"]
@@ -427,9 +506,16 @@
   sector("brick_factory", "brick", { coal: 0.2 }, 5, false);
   sector("textile_mill", "cloth", { food: 0.001 }, 6, false);
   sector("machinery_factory", "machinery", { steel: 1.0 }, 4, false);
+  sector("auto_factory", "car", { steel: C.CAR_STEEL_PER_UNIT }, 4, false);
   sector("construction", "building", { brick: 0.5 }, 6, false);
   sector("fertilizer_factory", "fertilizer", { coal: 2.0 }, 3, false);
   sector("service", "service", {}, 1000, false);
+
+  // Steel mills additionally accept the scrap recipe. `inputs` above stays
+  // the ore route so legacy/A2-off code sees exactly the V0.6 recipe.
+  const steelParams = SECTOR_PARAMS.get("steel_mill");
+  steelParams.recipes = STEEL_RECIPES;
+  steelParams.extraInputs = { scrap: true };
 
   // -------------------------------------------------------------------
   // V0.6 Stone-Geary / linear expenditure demand (src/ecosim/demand.py)
@@ -584,15 +670,21 @@
     if (initial <= 1e-12) return 100.0;
     return 100.0 * subsistenceCost(prices, cfg) / initial;
   }
+  function sectorUsesInput(industry, good) {
+    const params = SECTOR_PARAMS.get(industry);
+    if (!params) return false;
+    if (params.inputs[good]) return true;
+    return !!(params.extraInputs && params.extraInputs[good]);
+  }
 
 export {
   C, GOODS, INDUSTRIES, GOOD_LABELS, GOOD_UNITS, INDUSTRY_LABELS,
   CONSUMER_GOODS, CAPITAL_GOODS, INITIAL_PRICES, EQUIPMENT,
-  MANUAL_EQUIPMENT, SECTOR_PARAMS, EquipmentType,
+  MANUAL_EQUIPMENT, SECTOR_PARAMS, EquipmentType, STEEL_RECIPES,
   BUNDLE, BUNDLE_LABELS, DEFAULT_DEMAND,
   zeros, copyNumbers, clamp, pySum, round2, maxKeyBy, PythonRandom,
   demandSubsistence, demandCaps, demandShareTable, priceOf,
   subsistenceCost, consumptionBudget, capitalistConsumptionBudget,
   marginalBudgetShares, demandTargets, demandShares, realWageProxy,
-  consumerPriceIndex,
+  consumerPriceIndex, sectorUsesInput,
 };

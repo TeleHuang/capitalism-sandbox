@@ -3,7 +3,7 @@
  * discovery and the free cost-plus regime path.
  */
 import {
-  C, GOODS, INITIAL_PRICES, SECTOR_PARAMS,
+  C, GOODS, INITIAL_PRICES, sectorUsesInput,
 } from "./00-core.js";
 import {
   Enterprise, FoodReserve, InvestmentProject, Worker, Capitalist,
@@ -16,6 +16,8 @@ class Market {
     this.priceRegime = "band";
     this.costAnchors = {};
     this.markupAnchors = {};
+    // Optional explicit anchors (used by A2 scrap: p_scrap tracks iron ore).
+    this.priceAnchors = {};
     this.ordersBuy = {};
     this.ordersSell = {};
     this.history = {};
@@ -81,6 +83,9 @@ class Market {
           dealVolume = Math.min(dealVolume, s.agent.inv(good));
         } else if (s.agent instanceof FoodReserve) {
           dealVolume = Math.min(dealVolume, s.agent.food);
+        } else if ((s.agent instanceof Worker || s.agent instanceof Capitalist) &&
+                   good === "scrap") {
+          dealVolume = Math.min(dealVolume, Math.max(0.0, s.agent.scrap || 0.0));
         }
         if (dealVolume <= 1e-9) {
           if (buyerCash <= 1e-9) buys.shift();
@@ -99,8 +104,7 @@ class Market {
         if (b.agent instanceof InvestmentProject) this.investmentSpending += amount;
         if (b.agent instanceof Government) this.governmentSpending += amount;
         if (b.agent instanceof Enterprise) {
-          const inputs = SECTOR_PARAMS.get(b.agent.industry).inputs;
-          if (Object.prototype.hasOwnProperty.call(inputs, good)) {
+          if (sectorUsesInput(b.agent.industry, good)) {
             b.agent.monthInputCost += amount;
           }
         }
@@ -168,6 +172,7 @@ class Market {
     const observed = volume > 1e-9 ? value / volume : 0.0;
     const cost = this.costAnchors[good] || 0.0;
     const markup = this.markupAnchors[good] ?? 0.15;
+    const explicitAnchor = this.priceAnchors[good] || 0.0;
     const unmet = buys.reduce((sum, order) => sum + order.quantity, 0.0);
     const unsold = sells.reduce((sum, order) => sum + order.quantity, 0.0);
     const coverage = (volume + unsold) / Math.max(demand, 1e-9);
@@ -175,7 +180,13 @@ class Market {
     if (demand <= 1e-9 && coverage <= 0.0) {
       next = old;
     } else {
-      if (cost > 1e-9) {
+      if (explicitAnchor > 1e-9) {
+        // By-products without a producing sector (scrap) are anchored to a
+        // primary input (iron ore) plus current market evidence.
+        const observedAnchor = observed > 0 ? observed : old;
+        next = C.SCRAP_PRICE_ANCHOR_WEIGHT * explicitAnchor +
+          (1.0 - C.SCRAP_PRICE_ANCHOR_WEIGHT) * observedAnchor;
+      } else if (cost > 1e-9) {
         const costTarget = cost * (1.0 + markup);
         const observedAnchor = observed > 0 ? observed : old;
         next = C.FREE_COST_ANCHOR_WEIGHT * costTarget +
@@ -218,11 +229,25 @@ class Market {
 
   _receiveGood(agent, good, quantity) {
     if (agent instanceof Worker || agent instanceof Capitalist) {
+      if (agent.monthPurchases) {
+        agent.monthPurchases[good] = (agent.monthPurchases[good] || 0.0) + quantity;
+      }
       if (good === "food") agent.food += quantity;
       else if (good === "meat") agent.meat += quantity;
       else if (good === "cloth") agent.cloth += quantity;
       else if (good === "building") agent.housing += quantity;
       else if (good === "service") agent.service += quantity;
+      else if (good === "car") {
+        agent.cars = (agent.cars || 0.0) + quantity;
+        if (!Array.isArray(agent.carBatches)) agent.carBatches = [];
+        agent.carBatches.push({
+          key: "car",
+          quantity,
+          monthsLeft: C.CAR_LIFETIME_MONTHS,
+        });
+      } else if (good === "scrap") {
+        agent.scrap = (agent.scrap || 0.0) + quantity;
+      }
       return;
     }
     if (agent instanceof Government) {
@@ -243,6 +268,9 @@ class Market {
       agent.inventory[good] = Math.max(0.0, (agent.inventory[good] || 0.0) - quantity);
     } else if (agent instanceof FoodReserve && good === "food") {
       agent.food = Math.max(0.0, agent.food - quantity);
+    } else if ((agent instanceof Worker || agent instanceof Capitalist) &&
+               good === "scrap") {
+      agent.scrap = Math.max(0.0, (agent.scrap || 0.0) - quantity);
     }
   }
 }

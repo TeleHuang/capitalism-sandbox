@@ -59,16 +59,21 @@
 - 文件：`web/release/ecosim-v06.html`（约 584 KiB，双击 / `file://` 打开）。
 - 模块源码：`web/release/src/00-core.js` … `60-ui.js`；构建：
   `node scripts/build_release_v06.mjs`（`--check` 验证无外部资源）。
-- 已移植：V0.4 核心（11 商品/行业含服务、市场/生产/劳动/投资/会计/银行/
-  政府/MMT/JG/化肥/土地/粮食储备）、V0.6 A+B（Stone-Geary 需求、肉类、
-  服务吸收、工资—生产率/8h/16h、free 价格）、V0.5 人口/PAYG 养老金。
-- 玩家 UI：开始页、进度、播放控制、KPI/宏观/劳动/人口/货币图、
-  六边形城市地图（中心 + 六行业地块，点击工厂）、商品/工厂面板/产品图标/
-  2^N 机制说明（矿类：1× 徒手采矿、2×+ 矿井设备）、黄金对比页、移动布局。
-- 未实现：A2 耐用品/废钢/土地兼并、C 完整信贷/央行反应函数（已标注）。
-- 验证：Node 引擎测试 11/11；Python 黄金 oracle 60/240 月四剧本对照
-  在合理区间（GDP 偏差约 ±7%、人口/CPI/食物/服务占比接近）；
-  Chrome `file://` 截图 `web/screenshots/v06-release-*.png`。
+- 已移植：V0.4 核心（13 商品/12 行业含服务与汽车、市场/生产/劳动/投资/
+  会计/银行/政府/MMT/JG/化肥/土地/粮食储备）、V0.6 A+B（Stone-Geary 需求、
+  肉类、服务吸收、工资—生产率/8h/16h、free 价格）、V0.5 人口/PAYG 养老金、
+  A2 耐用品/废钢/土地兼并。
+- A2：衣物 60 月、住房 600 月、农机/汽车/设备 120 月；家庭存量、磨损/维修、
+  vintage 报废、废钢（锚定铁矿）与钢厂“废钢+半煤”配方；土地兼并到 200 亩、
+  超大型 2^N 农机、闲置小农机出售。
+- 玩家 UI：开始页/A2 开关、进度、播放控制、KPI（含住房存量）/宏观/劳动/
+  人口/货币图、**六边形城市地图**（中心 + 六行业地块，点击工厂）、
+  商品/工厂面板/产品图标/2^N 机制说明、A2 机制页、耐用品/废钢/兼并数据页、
+  黄金对比页、移动布局。
+- 未实现：C 完整信贷/央行反应函数（已标注）。
+- 验证：Node 引擎测试 16/16（`--slow`，含四剧本 240 月）；A2 off 时
+  Python 黄金 oracle 60/240 月四剧本对照仍在合理区间；Chrome `file://`
+  截图验证总览/地图/机制/数据页（A2 开启）。
 - 备注：JS 是唯一逻辑源；Python 只作 oracle，不再新增功能。
 
 ## V0.5 历史 240 月结果（家庭农场修复后）
@@ -121,9 +126,11 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
    `feature/html-engine`，模块化 ES modules/TS + Node 测试 + 单文件构建；
    先交付核心 V0.6 可玩版（V0.4 机制 + 需求/工资/free + 服务/肉类 +
    人口/养老金尽量），Python 只做黄金 oracle。
-2. **A2 耐用品/生命周期（推迟到发行版之后）**：衣服 60 月、住房 600 月、
-   农机/车 120 月、废钢/钢厂回购、汽车/住房存量、土地兼并/超大型农机；
-   直接在 JS/TS 基础做。Python A2 分支取消/不合并。
+2. **A2 耐用品/生命周期（已实现，`feature/js-durables`）**：衣服 60 月、
+   住房 600 月、农机/车 120 月、废钢/钢厂回购、汽车/住房存量、土地兼并/
+   超大型农机。已知简化：独立汽车装配行业（机械厂不切换产出）、砖砌炉窑
+   不进入 vintage 寿命（结构资产）、古典 240 月失业约 20.7%/无饥饿死亡，
+   中间年份仍有投资—就业周期，后续可与 C/D 一起平滑。
 3. **C 银行/信贷/MMT（JS）**：贷款创造存款、准备金/资本约束、信用审查、
    央行通胀/利率反应函数。
 4. **D 土地开垦/estate（JS）**：开局缓慢开垦、estate 拍卖/再分配。
@@ -149,6 +156,7 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 | `feature/v06-demand` | `.claude/worktrees/v06-demand` | **已合并** `8a9fdd7`：收入依赖需求、肉类/服务吸收 |
 | `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **已合并** `727c388`：生产率工资、8h/16h、free 价格制度 |
 | `feature/html-engine` | `.claude/worktrees/html-engine` | **进行中**：TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
+| `feature/js-durables` | `.claude/worktrees/js-durables` | **待合并**：A2 耐用品/废钢/土地兼并（JS 发行版）；A2 可关闭以重放 oracle |
 | `feature/v06-durables` | `.claude/worktrees/v06-durables` | **已取消**：A2 推迟到 JS 发行版之后 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |

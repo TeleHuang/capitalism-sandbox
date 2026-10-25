@@ -26,8 +26,8 @@
   <div class="start-card">
     <div class="eyebrow">ECOSIM / V0.6 / SINGLE-FILE RELEASE</div>
     <h1>资本主义经济<br>模拟器</h1>
-    <p class="lead">一个封闭经济的月度沙盒：<strong>11 种商品、11 个行业、家庭需求、劳动市场、投资、银行、政府与土地</strong>。所有仿真逻辑与界面都在这一个 HTML 文件里，双击即可离线运行。</p>
-    <p class="honesty">本发行版覆盖 V0.4 核心机制、V0.6 A+B（收入依赖需求、肉类/畜牧业、服务业吸收、工资—生产率规则、默认 free 价格制度）与 V0.5 人口/养老金。<strong>A2 耐用品（衣服/住房/汽车寿命、废钢、土地兼并）与 C 信用/央行反应函数（贷款创造存款、准备金/资本约束）尚未实现</strong>；引擎已预留扩展点，界面会明确标注。</p>
+    <p class="lead">一个封闭经济的月度沙盒：<strong>13 种商品、12 个行业、家庭耐用品、废钢回收、土地兼并、劳动市场、投资、银行、政府与土地</strong>。所有仿真逻辑与界面都在这一个 HTML 文件里，双击即可离线运行。</p>
+    <p class="honesty">本发行版覆盖 V0.4 核心机制、V0.6 A+B（收入依赖需求、肉类/畜牧业、服务业吸收、工资—生产率规则、默认 free 价格制度）、V0.5 人口/养老金与 <strong>A2 耐用品</strong>（衣物 60 月、住房 600 月、农机/汽车 120 月、废钢、土地兼并/超大型农机）。<strong>C 信用/央行反应函数尚未实现</strong>；A2 可关闭以重放 Python 迁移 oracle。</p>
 
     <div class="start-section">
       <h2>选择历史制度</h2>
@@ -60,6 +60,11 @@
           </select>
           <small>free 不向界面暴露成本地板/天花板；亏损、减产和退出都是正常信号。</small>
         </div>
+        <div class="field">
+          <label for="durables-toggle">A2 耐用品与废钢</label>
+          <label class="check-line"><input id="durables-toggle" type="checkbox" checked> 启用衣物/住房/汽车存量、设备寿命与土地兼并</label>
+          <small>关闭后按 V0.6 流量口径运行，可重放 Python 迁移 oracle；默认开启。</small>
+        </div>
       </div>
     </div>
 
@@ -71,8 +76,8 @@
       <span class="tag green">V0.4 核心</span>
       <span class="tag green">V0.6 需求/工资/free</span>
       <span class="tag green">V0.5 人口/养老金</span>
-      <span class="tag blue">11 商品 / 11 行业</span>
-      <span class="tag amber">A2 耐用品：延期</span>
+      <span class="tag green">A2 耐用品/废钢/兼并</span>
+      <span class="tag blue">13 商品 / 12 行业</span>
       <span class="tag amber">C 信贷反应函数：延期</span>
     </div>
   </div>
@@ -226,7 +231,7 @@
       <div class="section-heading"><div><span class="kicker">MECHANISM</span><h2>机制说明</h2></div><p class="section-note">投入→产出、2^N 设备阶梯、矿业术语、需求与工资—价格规则</p></div>
       <div class="panel-grid">
         <article class="panel">
-          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">RECIPES</span><h2>投入 → 产出</h2><p class="panel-sub">点击行业行打开工厂面板</p></div><span class="panel-note">11 行业</span></header>
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">RECIPES</span><h2>投入 → 产出</h2><p class="panel-sub">点击行业行打开工厂面板</p></div><span class="panel-note">12 行业</span></header>
           <div class="panel-body"><div id="recipe-chain" class="recipe-list"></div></div>
         </article>
         <article class="panel">
@@ -244,6 +249,10 @@
           <div class="panel-body"><div id="wage-mechanism"></div></div>
         </article>
       </div>
+      <article class="panel" style="margin-top:10px">
+        <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">A2 DURABLES</span><h2>耐用品、废钢与土地兼并</h2><p class="panel-sub">衣物 60 月 / 住房 600 月 / 农机与汽车 120 月；存量是资产，磨损是实物消耗</p></div><span class="panel-note" id="durable-mechanism-note">—</span></header>
+        <div class="panel-body"><div id="durable-mechanism"></div></div>
+      </article>
       <article class="panel" style="margin-top:10px">
         <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">COVERAGE</span><h2>已移植 / 延期 / 扩展点</h2><p class="panel-sub">诚实的功能覆盖表；本页面不会把延期机制说成已实现</p></div></header>
         <div class="panel-body"><div id="feature-coverage" class="feature-grid"></div></div>
@@ -280,6 +289,16 @@
         <article class="panel">
           <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">HOUSEHOLDS</span><h2>家庭需求目标</h2><p class="panel-sub">成人平均目标量 / 平均消费预算</p></div></header>
           <div class="panel-body"><div id="demand-table"></div></div>
+        </article>
+      </div>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">DURABLE STOCKS</span><h2>耐用品存量与磨损</h2><p class="panel-sub">存量 / 目标 / 购买 / 磨损 / 维修；存量是实物资产，不是货币</p></div></header>
+          <div class="panel-body"><div id="durable-data"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">SCRAP &amp; VINTAGES</span><h2>设备批次、废钢与土地兼并</h2><p class="panel-sub">设备年龄桶 / 报废 / 废钢价格与钢厂配方 / 农场规模</p></div></header>
+          <div class="panel-body"><div id="scrap-data"></div></div>
         </article>
       </div>
     </section>

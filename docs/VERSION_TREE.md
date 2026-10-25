@@ -54,6 +54,7 @@
 | `feature/v06-demand` | `1d3bde4` | 已合并 | 收入依赖需求/肉类/服务吸收（主线 `8a9fdd7`） |
 | `feature/v06-wage-price` | `9fbcb4d` | 已合并 | 工资—生产率/8h/16h/free 价格（主线 `727c388`） |
 | `feature/html-engine` | `0336132` | 已合并 | TS/JS 单一逻辑源 + 单文件 HTML 核心发行版（主线 `4f15f01`） |
+| `feature/js-durables` | — | 待合并 | A2 耐用品/废钢/土地兼并（JS 发行版，默认开启，可关闭重放 oracle） |
 | `feature/v06-durables` | — | 已取消 | A2 推迟到 JS 发行版之后 |
 
 ## UI 启动

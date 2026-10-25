@@ -8,6 +8,7 @@ import {
 import {
   equipmentValue, capacityAtSkillOne, desiredWorkers, farmRequirements,
   unitCost, equipmentCost, representativeRoi, averageSkill,
+  plannedInputRatios,
 } from "./10-models.js";
 
   // Python decisions.subsistence_cost is the legacy *fixed* basket:
@@ -70,8 +71,9 @@ import {
       : engine.averageWage();
     const wageBill = required * wageRate;
     let inputCost = 0.0;
-    for (const good of Object.keys(params.inputs)) {
-      inputCost += params.inputs[good] * output * (prices[good] || 0.0);
+    const inputRatios = plannedInputRatios(engine, enterprise, prices);
+    for (const good of Object.keys(inputRatios)) {
+      inputCost += inputRatios[good] * output * (prices[good] || 0.0);
     }
     const depreciation = equipmentValue(enterprise, prices) / C.DEPRECIATION_MONTHS;
     return (wageBill + inputCost + depreciation) / output;
@@ -345,8 +347,9 @@ import {
     for (const worker of workers) skillSum += worker.skill;
     const skill = skillSum / Math.max(workers.length, 1);
     const expectedOutput = capacityAtSkillOne(enterprise) * plan * skill;
-    for (const good of Object.keys(params.inputs)) {
-      const ratio = params.inputs[good];
+    const inputRatios = plannedInputRatios(engine, enterprise, engine.market.referencePrices);
+    for (const good of Object.keys(inputRatios)) {
+      const ratio = inputRatios[good];
       const target = expectedOutput * ratio;
       const safetyMonths = enterprise.industry === "fertilizer_factory"
         ? C.FERTILIZER_COAL_BUFFER_MONTHS : 0.5;
@@ -357,7 +360,7 @@ import {
     return needs;
   }
 
-  function bestEquipmentChoice(engine, industry, budget, demandOverride) {
+  function bestEquipmentChoice(engine, industry, budget, demandOverride, enterprise) {
     const prices = engine.market.referencePrices;
     const wage = engine.averageWage();
     const landPrice = engine.land.price;
@@ -374,9 +377,38 @@ import {
       const cost = equipmentCost(key, prices);
       if (budget !== undefined && budget !== null && cost > budget) continue;
       const roi = representativeRoi(industry, key, prices, wage, landPrice, demand);
-      candidates.push({ cost, key, roi });
+      candidates.push({ cost, key, roi, power: et.power });
     }
     if (!candidates.length) return null;
+
+    // A2: once a capitalist farm is already powerful enough for its land,
+    // additional farm machines mostly idle. Target one worker per farm and
+    // choose the smallest 2^N tier that reaches that power, not the cheapest
+    // t0 unit. This is what makes land consolidation and super-large
+    // machinery possible without changing the 2^N production law.
+    if (industry === "agriculture" && engine.durablesA2 && enterprise) {
+      let currentPower = 0.0;
+      for (const [key, count] of enterprise.equipment) {
+        if (count <= 0 || !key.startsWith("farm_")) continue;
+        const et = EQUIPMENT.get(key);
+        if (et) currentPower += et.power * count;
+      }
+      const land = Math.max(0.0, enterprise.land || 0.0);
+      const targetPower = land > 0
+        ? Math.max(0.0, land / (C.LAND_PER_WORKER_BASE *
+            Math.max(1.0, C.CONSOLIDATION_TARGET_WORKERS)) - 1.0)
+        : 0.0;
+      if (currentPower + 1e-9 >= targetPower && currentPower > 0) return null;
+      const viable = candidates.filter((candidate) => candidate.roi >= C.INVESTMENT_HURDLE);
+      if (!viable.length) return null;
+      const above = viable
+        .filter((candidate) => candidate.power + 1e-9 >= targetPower)
+        .sort((a, b) => (a.power - b.power) || (b.roi - a.roi) || (a.cost - b.cost));
+      if (above.length) return { key: above[0].key, roi: above[0].roi };
+      viable.sort((a, b) => (b.power - a.power) || (b.roi - a.roi) || (a.cost - b.cost));
+      return { key: viable[0].key, roi: viable[0].roi };
+    }
+
     candidates.sort((a, b) => (a.cost - b.cost) || (b.roi - a.roi));
     return { key: candidates[0].key, roi: candidates[0].roi };
   }
@@ -398,7 +430,9 @@ import {
     const reserve = Math.max(wageBill * 3.0, 100.0);
     const available = enterprise.cash - reserve;
     if (available <= 0) return null;
-    const choice = bestEquipmentChoice(engine, enterprise.industry, available / 1.10);
+    const choice = bestEquipmentChoice(
+      engine, enterprise.industry, available / 1.10, undefined, enterprise,
+    );
     if (choice === null) return null;
     const cost = equipmentCost(choice.key, engine.market.referencePrices);
     if (choice.roi < C.INVESTMENT_HURDLE) return null;

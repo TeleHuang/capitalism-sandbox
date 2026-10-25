@@ -137,6 +137,8 @@ h1 { margin: 10px 0 8px; font-size: clamp(30px, 5vw, 54px); line-height: 1.04; l
   padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #101922;
 }
 .field label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 11.5px; font-weight: 700; letter-spacing: .04em; }
+.check-line { display: flex !important; align-items: center; gap: 8px; color: var(--text) !important; font-weight: 600 !important; letter-spacing: 0 !important; }
+.check-line input { width: auto !important; margin: 0; accent-color: var(--green); }
 .field input, .field select {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px;
   background: #0b131a; color: var(--ink); outline: none;

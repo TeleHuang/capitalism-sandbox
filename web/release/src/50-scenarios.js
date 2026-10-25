@@ -9,6 +9,7 @@ import {
 import { Engine, makeDemographics } from "./40-engine.js";
 import { Government, POLICY_REGIMES, MONEY_REGIMES } from "./15-government.js";
 import { Capitalist as EcoCapitalist, FoodReserve, equipmentSummary } from "./10-models.js";
+import { seedHouseholdDurables } from "./25-durables.js";
 
 const SCENARIOS = Object.freeze({
   classical: {
@@ -283,8 +284,18 @@ function buildScenario1(engine, config) {
         industry, ownerId: owner.id, cash: 5000.0, modernizationCapable: true,
       });
       enterprise.wageOffer = C.WAGE_BASE;
+      let equipmentUnit = 0;
       for (const [key, count] of Object.entries(equipment)) {
-        for (let n = 0; n < count; n++) enterprise.addEquipment(key);
+        for (let n = 0; n < count; n++) {
+          // Deterministic initial age spreads retirements over the 120-month
+          // equipment life instead of creating a T120 scrap cliff.
+          const age = engine.durablesA2
+            ? (ownerCursor * 13 + index * 29 + key.length * 7 + equipmentUnit * 17) %
+              C.EQUIPMENT_LIFETIME_MONTHS
+            : 0;
+          enterprise.addEquipment(key, 1, age);
+          equipmentUnit += 1;
+        }
       }
       const workerCount = workersPerEnterprise + (index < extraWorkers ? 1 : 0);
       for (let n = 0; n < workerCount; n++) {
@@ -304,7 +315,19 @@ function buildScenario1(engine, config) {
   addIndustry("brick_factory", 1, 50, { brick_t0: 1 });
   addIndustry("textile_mill", 1, 20, { textile_t0: 20 });
   addIndustry("machinery_factory", 1, 10, { machinery_t0: 1 });
+  if (engine.durablesA2) {
+    // Separate auto assembly industry (documented deviation from "machinery
+    // factory can produce farm machinery OR cars"): steel in, cars out.
+    addIndustry("auto_factory", 1, 10, { auto_t0: 1 });
+  }
   addIndustry("construction", 5, 25, { construction_t0: 1 }, 3);
+  if (engine.durablesA2) {
+    // A small pre-existing scrap stock at steel mills lets the scrap recipe
+    // operate immediately; thereafter equipment/car retirement supplies it.
+    for (const enterprise of engine.activeEnterprises("steel_mill")) {
+      enterprise.inventory.scrap = C.INITIAL_SCRAP_PER_STEEL_MILL;
+    }
+  }
 
   engine.land.totalLand = C.TOTAL_LAND_MU;
   engine.market.referencePrices = { ...INITIAL_PRICES };
@@ -335,6 +358,7 @@ function buildScenario1(engine, config) {
     engine.government.pensionFund = Math.min(config.pensionFundInitial || 0.0, engine.government.cash);
   }
   seedDependents(engine, config);
+  if (engine.durablesA2) seedHouseholdDurables(engine);
   engine.moneyInitial = engine.totalMoney();
   return engine;
 }
@@ -400,7 +424,13 @@ function createEngine(options) {
     : { ...(opts.config || SCENARIOS.classical) };
   if (opts.priceRegime) config.priceRegime = opts.priceRegime;
   if (opts.demandRegime) config.demandRegime = opts.demandRegime;
-  const engine = new Engine(opts.seed === undefined ? 1 : opts.seed);
+  const durables = opts.durables !== undefined
+    ? !!opts.durables
+    : (opts.durablesA2 !== undefined ? !!opts.durablesA2 : true);
+  const engine = new Engine(
+    opts.seed === undefined ? 1 : opts.seed,
+    { durables },
+  );
   buildScenario1(engine, config);
   return { engine, config };
 }

@@ -2,9 +2,8 @@
  * EcoSim V0.6 · engine source — module 10: entities and production.
  *
  * Field names mirror the former Python reference (models.py / production.py).
- * A2 durables will add vintage batches / household stocks here; the current
- * milestone keeps the hooks (`vintages`, `durableStock`) without changing
- * behaviour so A2 can be implemented directly in JS without a rewrite.
+ * A2 durable stocks / equipment vintage batches live here; legacy mode keeps
+ * the old monthly cloth/housing flow behaviour unchanged for oracle replay.
  */
 import {
   C, GOODS, EQUIPMENT, SECTOR_PARAMS,
@@ -49,8 +48,28 @@ import {
         livingStandard: "survival",
         demandTargets: {},
         demandBudget: 0.0,
-        // A2 hooks (clothes / housing / car stocks live here later).
+        // A2 household durables. `cloth` is the clothing stock (pieces) and
+        // `housing` the housing stock (m²) when A2 is enabled; in legacy mode
+        // they keep their V0.6 monthly-flow meaning.
         durableStock: {},
+        cars: 0.0,
+        carBatches: [],
+        scrap: 0.0,
+        monthPurchases: zeros(),
+        clothTargetStock: 0.0,
+        housingTargetStock: 0.0,
+        carTargetStock: 0.0,
+        clothQuality: 1.0,
+        clothQualityTarget: 1.0,
+        clothWear: 0.0,
+        housingWear: 0.0,
+        housingPurchased: 0.0,
+        housingMaintenancePaid: 0.0,
+        housingNewConstruction: 0.0,
+        carPurchased: 0.0,
+        carScrapped: 0.0,
+        scrapGenerated: 0.0,
+        durableSpending: 0.0,
       });
       Object.assign(this, fields || {});
     }
@@ -136,18 +155,26 @@ import {
         monthInputCost: 0.0,
         monthWages: 0.0,
         monthInterest: 0.0,
-        // A2 hooks: vintage batches / scrap can be added without changing
-        // existing equipment-map behaviour.
+        // A2 vintage batches. Each batch is {key, quantity, monthsLeft};
+        // equipment-map counts and vintage quantities are kept in lockstep by
+        // addEquipment()/retireEquipmentUnits().
         vintages: [],
+        replacementDemand: 0.0,
+        replacementByKey: {},
+        scrapGenerated: 0.0,
+        idleEquipmentSold: 0.0,
+        lastSteelRecipe: null,
+        lastScrapUsed: 0.0,
       });
       Object.assign(this, fields || {});
     }
     inv(good) {
       return this.inventory[good] || 0.0;
     }
-    addEquipment(key, quantity) {
+    addEquipment(key, quantity, ageMonths) {
       const qty = quantity === undefined ? 1 : quantity;
       this.equipment.set(key, (this.equipment.get(key) || 0) + qty);
+      addEquipmentVintage(this, key, qty, ageMonths);
     }
     equipmentCount(key) {
       return this.equipment.get(key) || 0;
@@ -188,6 +215,24 @@ import {
         demandTargets: {},
         demandBudget: 0.0,
         durableStock: {},
+        cars: 0.0,
+        carBatches: [],
+        scrap: 0.0,
+        monthPurchases: zeros(),
+        clothTargetStock: 0.0,
+        housingTargetStock: 0.0,
+        carTargetStock: 0.0,
+        clothQuality: 1.0,
+        clothQualityTarget: 1.0,
+        clothWear: 0.0,
+        housingWear: 0.0,
+        housingPurchased: 0.0,
+        housingMaintenancePaid: 0.0,
+        housingNewConstruction: 0.0,
+        carPurchased: 0.0,
+        carScrapped: 0.0,
+        scrapGenerated: 0.0,
+        durableSpending: 0.0,
       });
       Object.assign(this, fields || {});
     }
@@ -219,6 +264,7 @@ import {
         age: 0,
         active: true,
         started: false,
+        isReplacement: false,
       });
       Object.assign(this, fields || {});
     }
@@ -337,6 +383,137 @@ import {
   }
 
   // -------------------------------------------------------------------
+  // A2 equipment vintages / scrap and steel recipe selection
+  // -------------------------------------------------------------------
+  function scrapYieldForEquipment(key) {
+    const et = EQUIPMENT.get(key);
+    if (!et || et.capitalGood === null || et.capitalCost <= 0) return 0.0;
+    if (et.capitalGood === "machinery") return et.capitalCost * C.SCRAP_PER_MACHINERY_GOOD;
+    if (et.capitalGood === "steel") return et.capitalCost * C.SCRAP_PER_STEEL_GOOD;
+    if (et.capitalGood === "brick") return et.capitalCost * C.SCRAP_PER_BRICK_GOOD;
+    return 0.0;
+  }
+
+  function addEquipmentVintage(enterprise, key, quantity, ageMonths) {
+    const qty = Number(quantity) || 0.0;
+    if (qty <= 1e-12) return;
+    const et = EQUIPMENT.get(key);
+    // Zero-cost manual workshops / hand tools are labour-based production,
+    // not produced capital vintages; they neither age nor yield scrap.
+    // Brick-built furnaces and kilns are structures rather than mobile
+    // machinery; they stay in the equipment map until liquidation instead of
+    // triggering lumpy brick replacement projects.
+    if (!et || et.capitalGood === null || et.capitalCost <= 0 ||
+        et.capitalGood === "brick") return;
+    const age = Math.max(0.0, Math.min(
+      C.EQUIPMENT_LIFETIME_MONTHS - 1.0,
+      Number(ageMonths) || 0.0,
+    ));
+    const monthsLeft = Math.max(1.0, C.EQUIPMENT_LIFETIME_MONTHS - age);
+    const last = enterprise.vintages[enterprise.vintages.length - 1];
+    if (last && last.key === key && Math.abs(last.monthsLeft - monthsLeft) < 1e-9) {
+      last.quantity += qty;
+      return;
+    }
+    enterprise.vintages.push({ key, quantity: qty, monthsLeft });
+  }
+
+  /**
+   * Remove physical equipment units and return their scrap metal once.
+   * Oldest vintages (lowest monthsLeft) are consumed first so age statistics
+   * stay meaningful. The equipment map is the authoritative count; vintage
+   * quantities are reduced by the same amount.
+   */
+  function retireEquipmentUnits(enterprise, key, quantity) {
+    const wanted = Math.max(0.0, Number(quantity) || 0.0);
+    const available = enterprise.equipment.get(key) || 0.0;
+    const removed = Math.min(wanted, available);
+    if (removed <= 1e-12) return { units: 0.0, scrap: 0.0 };
+    enterprise.equipment.set(key, available - removed);
+    if (available - removed <= 1e-12) enterprise.equipment.delete(key);
+
+    const ordered = enterprise.vintages
+      .filter((batch) => batch.key === key && batch.quantity > 1e-12)
+      .sort((a, b) => a.monthsLeft - b.monthsLeft);
+    let remaining = removed;
+    for (const batch of ordered) {
+      if (remaining <= 1e-12) break;
+      const take = Math.min(batch.quantity, remaining);
+      batch.quantity -= take;
+      remaining -= take;
+    }
+    enterprise.vintages = enterprise.vintages.filter((batch) => batch.quantity > 1e-12);
+
+    const scrap = scrapYieldForEquipment(key) * removed;
+    if (scrap > 1e-12) {
+      enterprise.inventory.scrap = (enterprise.inventory.scrap || 0.0) + scrap;
+      enterprise.scrapGenerated += scrap;
+    }
+    return { units: removed, scrap };
+  }
+
+  function steelRecipeCost(recipe, prices) {
+    let cost = 0.0;
+    for (const [good, ratio] of Object.entries(recipe.inputs)) {
+      cost += ratio * (prices[good] || 0.0);
+    }
+    return cost;
+  }
+
+  function steelRecipes() {
+    const params = SECTOR_PARAMS.get("steel_mill");
+    return params && params.recipes ? params.recipes : null;
+  }
+
+  /**
+   * Pick a steel recipe. `feasibleOnly=true` is used by production: among
+   * recipes with inputs on hand, prefer the one that can support the most
+   * output, then the cheaper one. Input planning (`feasibleOnly=false`) uses
+   * relative cost, but only considers the scrap route when scrap is actually
+   * available in inventories / recent market supply.
+   */
+  function chooseSteelRecipe(engine, enterprise, prices, feasibleOnly) {
+    const recipes = steelRecipes();
+    if (!recipes || !engine || !engine.durablesA2 ||
+        enterprise.industry !== "steel_mill") {
+      return { name: "ore", inputs: SECTOR_PARAMS.get(enterprise.industry).inputs };
+    }
+    const priced = recipes.map((recipe) => {
+      let feasible = true;
+      let maxOutput = Infinity;
+      for (const [good, ratio] of Object.entries(recipe.inputs)) {
+        if (ratio <= 0) continue;
+        const stock = enterprise.inv(good);
+        if (stock <= 1e-9) feasible = false;
+        maxOutput = Math.min(maxOutput, stock / Math.max(ratio, 1e-12));
+      }
+      return { recipe, feasible, maxOutput, cost: steelRecipeCost(recipe, prices) };
+    });
+    if (feasibleOnly) {
+      const feasible = priced.filter((item) => item.feasible && item.maxOutput > 1e-9);
+      if (feasible.length) {
+        feasible.sort((a, b) => (b.maxOutput - a.maxOutput) || (a.cost - b.cost));
+        return feasible[0].recipe;
+      }
+    }
+    const scrapMarketSupply = engine.market?.history?.scrap?.supply || 0.0;
+    const scrapInStock = enterprise.inv("scrap") > 1e-9;
+    const scrapGlobal = Number(engine._scrapSupplyStock) || 0.0;
+    const scrapAvailable = scrapInStock || scrapMarketSupply > 1e-6 || scrapGlobal > 1e-6;
+    let candidates = recipes.filter((recipe) => recipe.name !== "scrap" || scrapAvailable);
+    if (!candidates.length) candidates = recipes.slice();
+    candidates.sort((a, b) => steelRecipeCost(a, prices) - steelRecipeCost(b, prices));
+    return candidates[0];
+  }
+
+  function plannedInputRatios(engine, enterprise, prices) {
+    if (enterprise.industry === "steel_mill" && engine && engine.durablesA2) {
+      return chooseSteelRecipe(engine, enterprise, prices, false).inputs;
+    }
+    return SECTOR_PARAMS.get(enterprise.industry).inputs;
+  }
+
+  // -------------------------------------------------------------------
   // Production helpers (src/ecosim/production.py)
   // -------------------------------------------------------------------
   function equipmentSummary(enterprise) {
@@ -448,21 +625,31 @@ import {
     const { capacity, workers: required } = equipmentSummary(enterprise);
     if (capacity <= 0 || required <= 0) {
       enterprise.lastOutput = 0.0;
+      enterprise.lastSteelRecipe = null;
+      enterprise.lastScrapUsed = 0.0;
       return 0.0;
     }
     const utilisation = Math.min(plan, effectiveLabor / required);
     const theoretical = capacity * utilisation * skill * productivityMultiplier(engine, enterprise);
     const params = SECTOR_PARAMS.get(enterprise.industry);
+    let inputRatios = params.inputs;
+    if (enterprise.industry === "steel_mill" && engine.durablesA2) {
+      const recipe = chooseSteelRecipe(engine, enterprise, engine.market.referencePrices, true);
+      inputRatios = recipe.inputs;
+      enterprise.lastSteelRecipe = recipe.name;
+    } else {
+      enterprise.lastSteelRecipe = enterprise.industry === "steel_mill" ? "ore" : null;
+    }
     let maxOutput = theoretical;
-    for (const good of Object.keys(params.inputs)) {
-      const ratio = params.inputs[good];
+    for (const good of Object.keys(inputRatios)) {
+      const ratio = inputRatios[good];
       if (ratio <= 0) continue;
       maxOutput = Math.min(maxOutput, enterprise.inv(good) / ratio);
     }
     maxOutput = Math.max(0.0, maxOutput);
     const used = {};
-    for (const good of Object.keys(params.inputs)) {
-      const ratio = params.inputs[good];
+    for (const good of Object.keys(inputRatios)) {
+      const ratio = inputRatios[good];
       const consumed = maxOutput * ratio;
       enterprise.inventory[good] = Math.max(0.0, enterprise.inv(good) - consumed);
       used[good] = consumed;
@@ -470,6 +657,7 @@ import {
     enterprise.inventory[params.output] = enterprise.inv(params.output) + maxOutput;
     enterprise.lastOutput = maxOutput;
     enterprise.lastInputUsed = used;
+    enterprise.lastScrapUsed = used.scrap || 0.0;
     return maxOutput;
   }
   function equipmentValue(enterprise, prices) {
@@ -588,4 +776,6 @@ export {
   capacityAtSkillOne, averageSkill, averageWage, productivityMultiplier,
   produce, equipmentValue, fullCapacityUnitCost, unitCost, capitalValue,
   inventoryValue, netWorth, equipmentCost, representativeRoi,
+  scrapYieldForEquipment, addEquipmentVintage, retireEquipmentUnits,
+  steelRecipeCost, steelRecipes, chooseSteelRecipe, plannedInputRatios,
 };
