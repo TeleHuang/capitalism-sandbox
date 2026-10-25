@@ -57,9 +57,14 @@
    用 240 月信贷冲击对比死亡/零现金/饥饿。
 4. **D5 百年仿真/长程修复**：土地 estate 拍卖或无地分配、长期负利润、
    古典/Keynesian 饥荒；20–100 seeds 验证。
-5. **价格指导价 v2**：`feature/price-guidance` 已实现 opt-in `guidance`
-   （ADR 0005）。v1 用订单簿库存 vs 月需求导致通缩—失业—饥荒；v2 改用
-   库存覆盖月数（库存/月度需求），仍在 240 月对比中。默认保持 `band`。
+5. **价格指导价 v2 + 家庭农场会计（最高优先）**：
+   `feature/price-guidance` 已实现 opt-in `guidance`（ADR 0005，v2 commit
+   `7c1d949`，85 tests）。v1 用订单簿库存 vs 月需求导致通缩—失业—饥荒；
+   v2 改用库存覆盖月数，240 月仍崩溃（classical 104 / keynesian 95 /
+   mmt 248 存活），但诊断出主放大器：**自耕农所有者同时领工资**，
+   食品收入 < 工资时靠银行借债发自己的工资，最终清算 500+ 家庭农场。
+   下一轮先修家庭农场剩余收入会计（`fix/household-farm-income`），
+   再与人口/食品救济合并测试 guidance。
 6. **HTML 单文件发行版**：本地驾驶舱可用；单文件发行版仍需同步 V0.5。
 
 ## 并行版本树（进行中）
@@ -70,7 +75,8 @@
 |---|---|---|
 | `feature/demography` | `.claude/worktrees/demography` | **已合并** `365aa93`：V0.5 人口/代际/退休金 |
 | `fix/demography-safety` | `.claude/worktrees/demography-fix` | **已合并** `7429a3b`：救济/养老金/土地/统计修复 |
-| `feature/price-guidance` | `.claude/worktrees/price-guidance` | **进行中**：opt-in 指导价 v1（`33ca831`）+ v2 库存覆盖月数 |
+| `feature/price-guidance` | `.claude/worktrees/price-guidance` | **进行中**：opt-in 指导价 v1（`33ca831`）+ v2（`7c1d949`）；仍崩溃，默认 band |
+| `fix/household-farm-income` | `.claude/worktrees/household-income` | **进行中**：自耕农剩余收入/不借债发自己工资 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |
 | `feature/services` | `.claude/worktrees/services` | 已合并 `79d27de` |
