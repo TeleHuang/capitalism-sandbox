@@ -270,6 +270,15 @@
   .kpi-delta { margin-top: 4px; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .kpi .spark { width: 100%; height: 27px; margin-top: auto; padding-top: 5px; opacity: 0.95; }
 
+  /* ---------- 人口金字塔 ---------- */
+  .pyramid-host { display: flex; flex-direction: column; gap: 4px; min-height: 190px; justify-content: center; }
+  .pyramid-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 38px; align-items: center; gap: 7px; }
+  .pyramid-age { color: var(--muted); font-family: var(--mono); font-size: 10px; text-align: right; }
+  .pyramid-track { height: 9px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+  .pyramid-bar { height: 100%; border-radius: 999px; background: var(--series-3); opacity: 0.9; min-width: 1px; }
+  .pyramid-count { color: var(--ink-2); font-family: var(--mono); font-size: 10px; text-align: right; }
+  .pyramid-empty { color: var(--muted); font-size: 11px; text-align: center; padding: 24px 0; }
+
   /* ---------- 面板 ---------- */
   .panel {
     min-width: 0; border: 1px solid var(--line); border-radius: var(--radius);

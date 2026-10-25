@@ -1,7 +1,8 @@
-# V0.4 经济驾驶舱（本地 API 版）
+# V0.5 经济驾驶舱（本地 API 版）
 
-这是 V0.4 引擎的本地诊断 UI，不是生产部署服务。前端不嵌入任何仿真数据；
+这是 V0.5 引擎的本地诊断 UI，不是生产部署服务。前端不嵌入任何仿真数据；
 所有卡片、图表、诊断表都通过同源 `fetch` 读取后端真实运行的 `Engine.stats` 裁剪结果。
+V0.5 增加“人口与代际”面板：人口金字塔、出生/死亡、抚养比、养老金收支。
 
 ## 启动
 
@@ -33,7 +34,7 @@ URL 查询参数会原样传给 API：
 http://127.0.0.1:8765/?regime=mmt&months=120&seed=7
 ```
 
-- `regime`: `classical` / `keynesian` / `mmt`
+- `regime`: `classical` / `keynesian` / `mmt` / `late_capitalism`
 - `months`: 1–1200，默认 240
 - `seed`: 整数，默认 1
 
@@ -54,6 +55,8 @@ http://127.0.0.1:8765/?regime=mmt&months=120&seed=7
 - `scalars`: 逐月标量序列（存活、失业、GDP、投资、债务、央行货币、银行、预算、利润等）
 - `goods`: 逐商品序列（价格、产量、需求、供给、成交、库存、价格带、零产出 streak）
 - `industries`: 逐月企业数、工人数、活跃项目
+- `demography`: 年龄桶列表与逐月 `age_histogram`（人口金字塔）；人口/出生/死亡/
+  抚养比/养老金等标量在 `scalars`
 - `warnings`: 每月引擎告警
 
 ### `GET /api/compare`

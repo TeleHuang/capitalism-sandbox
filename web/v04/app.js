@@ -504,6 +504,20 @@
   function industryAt(field, key, index) {
     return num(industrySeries(field, key)[index], 0);
   }
+  function ageHistogramSeries(bucket, regimeId) {
+    var run = RUNS[regimeId || state.regime];
+    var mapping = run && run.demography && run.demography.age_histogram;
+    if (!mapping || !Array.isArray(mapping[bucket])) return [];
+    return mapping[bucket];
+  }
+  function ageAt(bucket, index, regimeId) {
+    return num(ageHistogramSeries(bucket, regimeId)[index], 0);
+  }
+  function ageBuckets() {
+    var run = currentData();
+    var buckets = run.demography && run.demography.age_buckets;
+    return Array.isArray(buckets) ? buckets : [];
+  }
   function warningsAt(index) {
     var data = currentData();
     var warnings = data.warnings && data.warnings[index];
@@ -658,7 +672,7 @@
       }
     }
     if (refs.kpiContext) refs.kpiContext.textContent = "第 " + state.month + " 月 / 共 " + MONTHS + " 月 · " + regime.label;
-    document.title = "EcoSim V0.4 · " + regime.label + " · T" + state.month;
+    document.title = "EcoSim V0.5 · " + regime.label + " · T" + state.month;
     updateRegimeTabStates();
   }
 
@@ -704,6 +718,21 @@
     var regime = regimeMeta();
     var reserveMonthsText = reserveMonths == null ? "无食品市场需求" : fmtMonths(reserveMonths);
     var jgShare = alive > 0 ? jgWorkers / alive : 0;
+    var population = scalarAt("population", index);
+    var children = scalarAt("children", index);
+    var workingAge = scalarAt("working_age", index);
+    var retirees = scalarAt("retirees", index);
+    var births = scalarAt("births", index);
+    var deaths = scalarAt("deaths", index);
+    var birthRate = scalarAt("birth_rate", index);
+    var deathRate = scalarAt("death_rate", index);
+    var dependencyRatio = scalarAt("dependency_ratio", index);
+    var oldAgeDependency = scalarAt("old_age_dependency", index);
+    var pensionFund = scalarAt("pension_fund", index);
+    var pensionRevenue = scalarAt("pension_revenue", index);
+    var pensionSpending = scalarAt("pension_spending", index);
+    var pensionRecipients = scalarAt("pension_recipients", index);
+    var averageAge = scalarAt("average_age", index);
 
     refs.kpiGrid.innerHTML = [
       kpiCard({
@@ -761,6 +790,38 @@
         sub: "存款 <b>" + fmtCompact(deposits) + "</b> · 贷款 <b>" + fmtCompact(loans) + "</b><br>坏账 <b>" + fmtCompact(writeOffs) + "</b> · 权益 <b>" + fmtCompact(equity) + "</b>",
         delta: previous == null ? "起始月" : deltaText(bankCash, scalarAt("bank_cash", previous), "pct"),
         spark: "bank_cash"
+      }),
+      kpiCard({
+        label: "人口结构", tag: "人口", color: "var(--series-3)",
+        value: fmtInt(population), exact: fmtInt(population) + " 人", unit: "人",
+        sub: "儿童 <b>" + fmtInt(children) + "</b> · 劳动 <b>" + fmtInt(workingAge) +
+          "</b> · 退休 <b>" + fmtInt(retirees) + "</b><br>平均年龄 <b>" + fmtNum(averageAge, 1) + "</b> 岁",
+        delta: previous == null ? "起始月" : deltaText(population, scalarAt("population", previous), "count"),
+        spark: "population"
+      }),
+      kpiCard({
+        label: "出生 / 死亡", tag: "人口流", color: "var(--series-1)",
+        value: fmtInt(births), exact: fmtInt(births) + " 人 / 月", unit: "人",
+        sub: "死亡 <b>" + fmtInt(deaths) + "</b> 人 · 出生率 <b>" + fmtPct(birthRate, 2) +
+          "</b><br>死亡率 <b>" + fmtPct(deathRate, 2) + "</b>",
+        delta: previous == null ? "起始月" : deltaText(births, scalarAt("births", previous), "count"),
+        spark: "births"
+      }),
+      kpiCard({
+        label: "总抚养比", tag: "代际", color: "var(--series-2)",
+        value: fmtPct(dependencyRatio, 1), exact: fmtPct(dependencyRatio, 2), unit: "",
+        sub: "老年抚养比 <b>" + fmtPct(oldAgeDependency, 1) +
+          "</b> · 儿童 + 退休 / 劳动年龄",
+        delta: previous == null ? "起始月" : deltaText(dependencyRatio, scalarAt("dependency_ratio", previous), "pp"),
+        spark: "dependency_ratio"
+      }),
+      kpiCard({
+        label: "养老金基金", tag: "养老金", color: "var(--series-4)",
+        value: fmtInt(pensionFund), exact: fmtInt(pensionFund) + " 元", unit: "元",
+        sub: "本月收入 <b>" + fmtCompact(pensionRevenue) + "</b> · 支出 <b>" +
+          fmtCompact(pensionSpending) + "</b><br>领取者 <b>" + fmtInt(pensionRecipients) + "</b> 人",
+        delta: previous == null ? "起始月" : deltaText(pensionFund, scalarAt("pension_fund", previous), "pct"),
+        spark: "pension_fund"
       })
     ].join("");
   }
@@ -776,7 +837,14 @@
   };
   var MULTI_META = {
     government_debt: { label: "政府债务", color: "var(--series-1)", format: "money" },
-    central_bank_money: { label: "央行货币", color: "var(--series-2)", format: "money" }
+    central_bank_money: { label: "央行货币", color: "var(--series-2)", format: "money" },
+    births: { label: "出生", color: "var(--series-1)", format: "count" },
+    deaths: { label: "死亡", color: "var(--series-4)", format: "count" },
+    dependency_ratio: { label: "总抚养比", color: "var(--series-3)", format: "rate" },
+    old_age_dependency: { label: "老年抚养比", color: "var(--series-2)", format: "rate" },
+    pension_revenue: { label: "养老金收入", color: "var(--series-1)", format: "money" },
+    pension_spending: { label: "养老金支出", color: "var(--series-4)", format: "money" },
+    pension_fund: { label: "基金余额", color: "var(--series-3)", format: "money" }
   };
   var SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -1144,9 +1212,9 @@
             format: meta ? meta.format : "money"
           };
         }).filter(function (one) { return one.values.length; });
-        if (!series.length) throw new Error("没有可用的政府/货币序列");
+        if (!series.length) throw new Error("没有可用序列");
         drawLineChart(host, series, {
-          label: "政府债务与央行货币", format: "money", includeZero: true,
+          label: "趋势", format: series[0].format || "money", includeZero: true,
           height: Number(host.getAttribute("data-height")) || 228, fill: false
         });
       } catch (error) {
@@ -1486,7 +1554,10 @@
         debt: compareValue(regime.id, "government_debt", compareIndex),
         centralBank: compareValue(regime.id, "central_bank_money", compareIndex),
         jg: compareValue(regime.id, "government_jg_workers", compareIndex),
-        food: compareValue(regime.id, "food_reserve", compareIndex)
+        food: compareValue(regime.id, "food_reserve", compareIndex),
+        population: compareValue(regime.id, "population", compareIndex),
+        dependency: compareValue(regime.id, "dependency_ratio", compareIndex),
+        pension: compareValue(regime.id, "pension_fund", compareIndex)
       };
       var loaded = !!RUNS[regime.id];
       var moneyLabel = regime.money_regime === "credit" ? "信用货币" : "金本位";
@@ -1504,10 +1575,13 @@
         '<td>' + fmtInt(values.centralBank) + '</td>' +
         '<td>' + fmtInt(values.jg) + '</td>' +
         '<td>' + fmtNum(values.food, 1) + '</td>' +
+        '<td>' + fmtInt(values.population) + '</td>' +
+        '<td>' + fmtPct(values.dependency, 1) + '</td>' +
+        '<td>' + fmtInt(values.pension) + '</td>' +
         '</tr>';
     }).join("");
     return '<div class="table-wrap"><table class="compare-table">' +
-      '<thead><tr><th>制度</th><th>存活</th><th>失业率</th><th>GDP</th><th>投资</th><th>资本主义利润率</th><th>政府债务</th><th>央行货币</th><th>就业保障</th><th>粮食储备</th></tr></thead>' +
+      '<thead><tr><th>制度</th><th>存活</th><th>失业率</th><th>GDP</th><th>投资</th><th>资本主义利润率</th><th>政府债务</th><th>央行货币</th><th>就业保障</th><th>粮食储备</th><th>人口</th><th>抚养比</th><th>养老金基金</th></tr></thead>' +
       '<tbody>' + rows + '</tbody></table></div>' +
       '<p class="table-foot">来自轻量对比接口 <code>/api/compare</code>，与当前时间轴同步；点击行可切换到该制度（未载入时首次会运行引擎）。</p>';
   }
@@ -1588,6 +1662,82 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* 人口与代际                                                          */
+  /* ------------------------------------------------------------------ */
+  function drawPopulationPyramid(host, index) {
+    var buckets = ageBuckets();
+    var counts = buckets.map(function (bucket) { return ageAt(bucket, index); });
+    var total = counts.reduce(function (a, b) { return a + b; }, 0);
+    var totalEl = document.getElementById("pyramid-total");
+    if (totalEl) totalEl.textContent = fmtInt(total) + " 人";
+    if (!buckets.length) {
+      host.innerHTML = '<div class="pyramid-empty">暂无人口数据</div>';
+      return;
+    }
+    var max = Math.max.apply(null, counts.concat([1]));
+    host.innerHTML = buckets.slice().reverse().map(function (bucket, reversedIndex) {
+      var count = counts[buckets.length - 1 - reversedIndex];
+      var width = Math.max(0, Math.min(100, count / max * 100));
+      return '<div class="pyramid-row">' +
+        '<span class="pyramid-age">' + escapeHtml(bucket) + '</span>' +
+        '<div class="pyramid-track"><div class="pyramid-bar" style="width:' + width.toFixed(2) + '%"></div></div>' +
+        '<span class="pyramid-count">' + fmtInt(count) + '</span>' +
+        '</div>';
+    }).join("");
+  }
+
+  function factRows(items) {
+    return items.map(function (item) {
+      return '<div class="fact"><span>' + escapeHtml(item[0]) + '</span><strong title="' +
+        escapeHtml(item[1]) + '">' + escapeHtml(item[1]) + '</strong></div>';
+    }).join("");
+  }
+
+  function renderDemoLegend(id, keys, index) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    host.innerHTML = keys.map(function (key) {
+      var meta = MULTI_META[key] || { label: key, color: "var(--series-3)", format: "money" };
+      return '<span class="legend-item"><span class="legend-key" style="--legend-color:' +
+        meta.color + '"></span>' + escapeHtml(meta.label) +
+        ' <span class="legend-value">' + fmtValue(scalarAt(key, index), meta.format) +
+        '</span></span>';
+    }).join("");
+  }
+
+  function renderDemography(index) {
+    drawPopulationPyramid(document.getElementById("population-pyramid"), index);
+    renderDemoLegend("birth-legend", ["births", "deaths"], index);
+    renderDemoLegend("dependency-legend", ["dependency_ratio", "old_age_dependency"], index);
+    renderDemoLegend("pension-legend", ["pension_revenue", "pension_spending", "pension_fund"], index);
+    var facts = document.getElementById("demography-facts");
+    if (facts) {
+      facts.innerHTML = factRows([
+        ["出生 / 死亡", fmtInt(scalarAt("births", index)) + " / " + fmtInt(scalarAt("deaths", index))],
+        ["出生率 / 死亡率", fmtPct(scalarAt("birth_rate", index), 2) + " / " + fmtPct(scalarAt("death_rate", index), 2)],
+        ["儿童 / 劳动 / 退休", fmtInt(scalarAt("children", index)) + " / " +
+          fmtInt(scalarAt("working_age", index)) + " / " + fmtInt(scalarAt("retirees", index))],
+        ["平均 / 中位年龄", fmtNum(scalarAt("average_age", index), 1) + " / " +
+          fmtNum(scalarAt("median_age", index), 1) + " 岁"],
+        ["总 / 老年抚养比", fmtPct(scalarAt("dependency_ratio", index), 1) + " / " +
+          fmtPct(scalarAt("old_age_dependency", index), 1)],
+        ["养老金领取者", fmtInt(scalarAt("pension_recipients", index)) + " 人"]
+      ]);
+    }
+    var pension = document.getElementById("pension-facts");
+    if (pension) {
+      pension.innerHTML = factRows([
+        ["基金余额", fmtCompact(scalarAt("pension_fund", index)) + " 元"],
+        ["本月收入", fmtCompact(scalarAt("pension_revenue", index)) + " 元"],
+        ["本月支出", fmtCompact(scalarAt("pension_spending", index)) + " 元"],
+        ["本月结余", fmtSigned(scalarAt("pension_balance", index), "money") + " 元"],
+        ["缴费", fmtCompact(scalarAt("pension_contributions", index)) + " 元"],
+        ["领取者", fmtInt(scalarAt("pension_recipients", index)) + " 人"]
+      ]);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
   /* 渲染调度                                                            */
   /* ------------------------------------------------------------------ */
   var scheduled = false;
@@ -1610,6 +1760,7 @@
     renderGovPanel(index);
     renderPriceGrid(index);
     renderProductionGrid(index);
+    renderDemography(index);
     renderDiagnostics(index);
     mountCharts();
   }

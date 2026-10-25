@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地 V0.4 经济驾驶舱服务（Python 标准库，无 FastAPI 依赖）。
+"""本地 V0.5 经济驾驶舱服务（Python 标准库，无 FastAPI 依赖）。
 
 启动：
   PYTHONPATH=src python scripts/serve_dashboard.py --port 8765
@@ -44,7 +44,7 @@ from ecosim.scenarios import (  # noqa: E402
     build_scenario_1,
 )
 
-DASHBOARD_VERSION = "0.4.2"
+DASHBOARD_VERSION = "0.5.0"
 DEFAULT_MONTHS = 240
 DEFAULT_SEED = 1
 MAX_MONTHS = 1200
@@ -117,6 +117,37 @@ SCALAR_FIELDS = (
     "food_reserve",
     "food_reserve_cash",
     "average_markup",
+    # --- V0.5 人口 / 养老金 ---
+    "population",
+    "children",
+    "working_age",
+    "retirees",
+    "labor_force",
+    "employed",
+    "births",
+    "deaths",
+    "birth_rate",
+    "death_rate",
+    "dependency_ratio",
+    "old_age_dependency",
+    "child_dependency",
+    "average_age",
+    "median_age",
+    "pension_contributions",
+    "pension_revenue",
+    "pension_spending",
+    "pension_balance",
+    "pension_fund",
+    "pension_recipients",
+    "food_relief",
+    "food_levy",
+)
+
+# 人口金字塔年龄桶；与 engine._record_stats 的 age_histogram keys 一致。
+AGE_BUCKETS = (
+    "0-4", "5-9", "10-14", "15-19", "20-24", "25-29", "30-34",
+    "35-39", "40-44", "45-49", "50-54", "55-59", "60-64", "65-69",
+    "70-74", "75-79", "80-84", "85+",
 )
 
 GOOD_FIELDS = (
@@ -139,7 +170,9 @@ INDUSTRY_FIELDS = (
 
 COMPARE_METRICS = (
     "alive",
+    "population",
     "unemployment_rate",
+    "dependency_ratio",
     "gdp",
     "investment",
     "profit_rate",
@@ -147,12 +180,18 @@ COMPARE_METRICS = (
     "central_bank_money",
     "government_jg_workers",
     "food_reserve",
+    "pension_fund",
 )
 
 SCALAR_RATE_FIELDS = {
     "unemployment_rate",
     "profit_rate",
     "average_markup",
+    "birth_rate",
+    "death_rate",
+    "dependency_ratio",
+    "old_age_dependency",
+    "child_dependency",
 }
 
 INTEGER_FIELDS = {
@@ -161,6 +200,15 @@ INTEGER_FIELDS = {
     "unemployed",
     "active_enterprises",
     "government_jg_workers",
+    "population",
+    "children",
+    "working_age",
+    "retirees",
+    "labor_force",
+    "employed",
+    "births",
+    "deaths",
+    "pension_recipients",
 }
 
 
@@ -316,6 +364,9 @@ def _extract_payload(
         for field in INDUSTRY_FIELDS
     }
     warnings_by_month: list[list[str]] = []
+    age_histogram_series: dict[str, list[int]] = {
+        bucket: [] for bucket in AGE_BUCKETS
+    }
 
     for index, stat in enumerate(stats):
         supplement = supplements[index] if index < len(supplements) else {}
@@ -334,6 +385,10 @@ def _extract_payload(
             for industry in industries:
                 raw = mapping.get(industry, 0.0) if isinstance(mapping, dict) else 0.0
                 industry_series[field][industry].append(_rounded(raw, field))
+        histogram = stat.get("age_histogram") or {}
+        for bucket in AGE_BUCKETS:
+            raw = histogram.get(bucket, 0) if isinstance(histogram, dict) else 0
+            age_histogram_series[bucket].append(int(round(_finite_float(raw))))
         raw_warnings = stat.get("warnings") or []
         deduped: list[str] = []
         if isinstance(raw_warnings, (list, tuple)):
@@ -361,7 +416,7 @@ def _extract_payload(
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return {
         "meta": {
-            "title": "EcoSim V0.4 经济驾驶舱",
+            "title": "EcoSim V0.5 经济驾驶舱",
             "version": DASHBOARD_VERSION,
             "months": months,
             "seed": seed,
@@ -382,6 +437,10 @@ def _extract_payload(
         "scalars": scalar_series,
         "goods": good_series,
         "industries": industry_series,
+        "demography": {
+            "age_buckets": list(AGE_BUCKETS),
+            "age_histogram": age_histogram_series,
+        },
         "warnings": warnings_by_month,
     }
 
@@ -718,7 +777,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 def main(argv: list[str] | None = None) -> int:
     global SERVICE
     parser = argparse.ArgumentParser(
-        description="V0.4 本地经济驾驶舱服务（标准库 http.server）"
+        description="V0.5 本地经济驾驶舱服务（标准库 http.server）"
     )
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
     parser.add_argument("--port", type=int, default=8765, help="端口（默认 8765）")
@@ -739,7 +798,7 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     server.daemon_threads = True
     print("=" * 66)
-    print("EcoSim V0.4 经济驾驶舱")
+    print("EcoSim V0.5 经济驾驶舱")
     print(f"前端：http://{args.host}:{args.port}/")
     print(f"接口：http://{args.host}:{args.port}/api/run?regime=classical&months=240&seed=1")
     print(f"对比：http://{args.host}:{args.port}/api/compare?months=240&seed=1")

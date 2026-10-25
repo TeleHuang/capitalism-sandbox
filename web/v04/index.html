@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="EcoSim V0.4 本地经济驾驶舱：真实引擎统计、制度切换与逐月诊断。">
-<title>EcoSim V0.4 · 经济驾驶舱</title>
+<meta name="description" content="EcoSim V0.5 本地经济驾驶舱：真实引擎统计、制度切换与逐月诊断。">
+<title>EcoSim V0.5 · 经济驾驶舱</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -27,7 +27,7 @@
 <div class="app">
   <header class="topbar">
     <div class="brand">
-      <div class="eyebrow">ECOSIM / V0.4 / DIAGNOSTIC COCKPIT</div>
+      <div class="eyebrow">ECOSIM / V0.5 / DIAGNOSTIC COCKPIT</div>
       <h1>经济驾驶舱</h1>
       <p class="lede">真实引擎输出 · 每个数字都来自 <code>engine.stats</code> 的逐月切片</p>
       <div class="meta-strip">
@@ -92,6 +92,68 @@
           <p id="kpi-context" class="section-note"></p>
         </div>
         <div id="kpi-grid" class="kpi-grid"></div>
+      </section>
+
+      <section aria-labelledby="demo-title">
+        <div class="section-heading">
+          <div><span class="kicker">DEMOGRAPHY</span><h2 id="demo-title">人口与代际</h2></div>
+          <p class="section-note">人口金字塔、出生/死亡、抚养比、养老金 · 来自同一份 stats</p>
+        </div>
+        <div class="dual-grid">
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>人口金字塔</h2>
+                <p class="panel-sub">按 5 岁年龄桶；当前月份总人数</p>
+              </div>
+              <span class="panel-note">总人口<br><span id="pyramid-total">—</span></span>
+            </header>
+            <div class="panel-body"><div id="population-pyramid" class="pyramid-host"></div></div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>出生 / 死亡</h2>
+                <p class="panel-sub">逐月出生与死亡人数；死亡含年龄死亡与饥饿死亡</p>
+              </div>
+              <span class="panel-note">人 / 月</span>
+            </header>
+            <div class="panel-body">
+              <div id="birth-legend" class="legend"></div>
+              <div class="chart-host" data-chart="multi" data-metrics="births,deaths" data-height="190"></div>
+              <div id="demography-facts" class="fact-list"></div>
+            </div>
+          </article>
+        </div>
+        <div class="dual-grid" style="margin-top:10px">
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>抚养比</h2>
+                <p class="panel-sub">总抚养比与老年抚养比 · 分母为劳动年龄人口</p>
+              </div>
+              <span class="panel-note">比率</span>
+            </header>
+            <div class="panel-body">
+              <div id="dependency-legend" class="legend"></div>
+              <div class="chart-host" data-chart="multi" data-metrics="dependency_ratio,old_age_dependency" data-height="190"></div>
+            </div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>养老金</h2>
+                <p class="panel-sub">当月缴费/发放与基金余额</p>
+              </div>
+              <span class="panel-note">元</span>
+            </header>
+            <div class="panel-body">
+              <div id="pension-legend" class="legend"></div>
+              <div class="chart-host" data-chart="multi" data-metrics="pension_revenue,pension_spending,pension_fund" data-height="190"></div>
+              <div id="pension-facts" class="fact-list"></div>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section class="chart-layout" aria-label="宏观与政府趋势图">
