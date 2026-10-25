@@ -11,12 +11,12 @@
 
 - 分支：`v0.4-integration`
 - 最新提交：见 `git log -1`（V0.5 人口/退休金 + V0.6 A 需求阶梯 +
-  B 工资—生产率/自由价格 + UI/六边形地图 + A2 耐用品）
+  B 工资—生产率/自由价格 + UI/六边形地图 + A2 耐用品 + A2 审查修复）
 - Python 版本：0.6.0（迁移期 oracle；**唯一逻辑源已改为 TS/JS**）
-- **单文件发行版已可用**：`web/release/ecosim-v06.html`（约 663 KiB，双击
+- **单文件发行版已可用**：`web/release/ecosim-v06.html`（约 671.7 KiB，双击
   打开；JS 引擎 + UI + 图标全部内联，无外部资源）。模块源码在
   `web/release/src/`，构建脚本 `scripts/build_release_v06.mjs`。
-- JS/Node：`node scripts/test_engine_v06.mjs`（15 快速）/`--slow`（16，含
+- JS/Node：`node scripts/test_engine_v06.mjs`（16 快速）/`--slow`（17，含
   四剧本 240 月）；`node scripts/build_release_v06.mjs --check` 验证零外部资源。
 - 本地 Python 驾驶舱只是诊断/oracle，不是最终发行版。
 - 测试：128 fast tests，默认快速套件 **~127s**（12 个 `@slow` skipped，全部 OK）；
@@ -30,8 +30,11 @@
 - 已实现：V0.4 全部机制 + V0.5 个体年龄/性别/家庭、Gompertz 死亡、
   ASFR 生育、儿童 allowance/消费、退休、PAYG 养老金（发薪/经营所得代扣）、
   `LATE_CAPITALISM`、粮食救济缓冲、土地继承/无地承接、家庭农场剩余收入。
-- A2 耐用品/废钢/土地兼并已合并（`202c027`）；A2 默认开启，可在开始页或
-  URL `durables=off` 关闭以重放 A2 之前的 Python 黄金 oracle。
+- A2 耐用品/废钢/土地兼并已合并（`202c027`），审查修复 `d4b0944`；A2 默认开启，
+  可在开始页或 URL `durables=off` 关闭以重放 A2 之前的 Python 黄金 oracle。
+- 审查修复后古典 free 240 月失业 44.7%（旧 20.7%）：旧值部分来自供给短缺租金
+  与积压项目；修复把需求/货币缺口暴露出来，交由 C 处理。详见
+  `docs/A2_REVIEW_2026-10-26.md`。
 - 长程验证：`scripts/validate_v05.py --months 1200 --seed 1 --jobs 4`。
 - 性能（seed=1，classical）：240 月约 15–16 秒、60 月约 4 秒；
   优化前约 131 秒 / 21.5 秒（工资报价的 O(n²) 劳动力扫描已缓存）。
@@ -58,9 +61,9 @@
 - 分支：`feature/v06-demand` `1d3bde4`、`feature/v06-wage-price` `9fbcb4d`；
   主线合并 `8a9fdd7` / `727c388`。
 
-## V0.6 单文件 HTML 发行版（`4f15f01` + A2 `202c027`）
+## V0.6 单文件 HTML 发行版（`4f15f01` + A2 `202c027` + 修复 `d4b0944`）
 
-- 文件：`web/release/ecosim-v06.html`（约 663 KiB，双击 / `file://` 打开）。
+- 文件：`web/release/ecosim-v06.html`（约 671.7 KiB，双击 / `file://` 打开）。
 - 模块源码：`web/release/src/00-core.js` … `60-ui.js`；构建：
   `node scripts/build_release_v06.mjs`（`--check` 验证无外部资源）。
 - 已移植：V0.4 核心（13 商品/12 行业含服务与汽车、市场/生产/劳动/投资/
@@ -75,10 +78,24 @@
   商品/工厂面板/产品图标/2^N 机制说明、A2 机制页、耐用品/废钢/兼并数据页、
   黄金对比页、移动布局。
 - 未实现：C 完整信贷/央行反应函数（已标注）。
-- 验证：Node 引擎测试 16/16（`--slow`，含四剧本 240 月）；A2 off 时
+- 验证：Node 引擎测试 16 快速/17 slow（`--slow`，含四剧本 240 月）；A2 off 时
   Python 黄金 oracle 60/240 月四剧本对照仍在合理区间；Chrome `file://`
-  截图验证总览/地图/机制/数据页（A2 开启）。
+  截图验证总览/地图/机制/数据页（A2 开启/关闭）。
 - 备注：JS 是唯一逻辑源；Python 只作 oracle，不再新增功能。
+
+### A2 审查修复（`d4b0944`，2026-10-26）
+
+独立审查确认 12 项缺陷（1 blocker：钢厂规划放弃铁矿导致钢铁/机械供给崩溃；
+high：死亡耐用品丢失、替换需求超时丢失、无设备僵尸企业；以及队列/URL/UI/KPI
+等）。修复后：
+
+- 四剧本钢铁/机械供给恢复（旧版 keynesian/MMT/late 机械产量为 0）。
+- keynesian 化肥恢复（旧版 0），食品产出提高。
+- 古典 free 240 月 GDP 14,954 / 失业 44.7%（旧 24,297 / 20.7%）：旧值部分来自
+  短缺租金与积压项目；修复把需求/货币缺口暴露出来，作为 C 的验收对象。
+- A2-off 黄金 60/240 月 bands 不变；单文件发行版 671.7 KiB。
+
+详见 `docs/A2_REVIEW_2026-10-26.md`。
 
 ## V0.5 历史 240 月结果（家庭农场修复后）
 
@@ -129,11 +146,11 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 1. **E/F JS/TS 模块化引擎 + 单文件 HTML 发行版（已完成）**：
    `feature/html-engine` 已合并 `4f15f01`，六边形地图 `83ba3e1`；
    下一步在单文件 JS 引擎上继续 C/D。
-2. **A2 耐用品/生命周期（已合并 `202c027`，feature `b8a275c`）**：衣服 60 月、
+2. **A2 耐用品/生命周期（已合并 `202c027` + 审查修复 `d4b0944`）**：衣服 60 月、
    住房 600 月、农机/车 120 月、废钢/钢厂回购、汽车/住房存量、土地兼并/
    超大型农机。已知简化：独立汽车装配行业（机械厂不切换产出）、砖砌炉窑
-   不进入 vintage 寿命（结构资产）、古典 240 月失业约 20.7%/无饥饿死亡，
-   中间年份仍有投资—就业周期，后续可与 C/D 一起平滑。
+   不进入 vintage 寿命（结构资产）。审查修复后古典 free 240 月失业 44.7%，
+   钢铁/机械/化肥供给恢复；需求缺口与投资—就业周期交 C/D 继续平滑。
 3. **C 银行/信贷/MMT（JS）**：贷款创造存款、准备金/资本约束、信用审查、
    央行通胀/利率反应函数。
 4. **D 土地开垦/estate（JS）**：开局缓慢开垦、estate 拍卖/再分配。
@@ -159,7 +176,7 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 | `feature/v06-demand` | `.claude/worktrees/v06-demand` | **已合并** `8a9fdd7`：收入依赖需求、肉类/服务吸收 |
 | `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **已合并** `727c388`：生产率工资、8h/16h、free 价格制度 |
 | `feature/html-engine` | `.claude/worktrees/html-engine` | **已合并** `4f15f01`：TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
-| `feature/js-durables` | `.claude/worktrees/js-durables` | **已合并** `202c027`：A2 耐用品/废钢/土地兼并（JS 发行版）；A2 可关闭以重放 oracle |
+| `feature/js-durables` | `.claude/worktrees/js-durables` | **已合并** `202c027` + 审查修复 `d4b0944`：A2 耐用品/废钢/土地兼并（JS 发行版）；A2 可关闭以重放 oracle |
 | `feature/v06-durables` | `.claude/worktrees/v06-durables` | **已取消**：A2 推迟到 JS 发行版之后 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |

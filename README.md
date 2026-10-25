@@ -120,8 +120,11 @@ web/release/ecosim-v06.html
 - A2 默认开启；开始页可关闭以重放 A2 之前的 Python 迁移 oracle。
 - 玩家 UI 含六边形城市地图（中心 + 六行业地块，点击工厂打开面板）。
 - 未实现（后续 JS 分支）：C 完整信贷/央行反应函数。
-- 测试/对比：`node scripts/test_engine_v06.mjs [--slow]`（16/16）与
+- 测试/对比：`node scripts/test_engine_v06.mjs [--slow]`（16 快速/17 slow）与
   `node scripts/compare_golden_v06.mjs --months=60|240`（默认 A2 off）。
+- A2 审查修复（`d4b0944`）：死亡耐用品遗产、钢厂废钢配额/铁矿路线、替换队列、
+  僵尸企业、A2-off 警告/URL/UI 等 12 项。修复后古典 free 240 月失业 44.7%
+  （旧 20.7%），需求缺口交 C；详见 `docs/A2_REVIEW_2026-10-26.md`。
 - Python 仅作为迁移期黄金 oracle，不再新增功能。
 
 ## V0.4 本地驾驶舱（诊断/oracle）
