@@ -104,7 +104,25 @@ w_target = WAGE_BASE × A^β × (1+π^e)^α × (1 + tightness + institutional)
 `src/ecosim/scenarios.py` 的 `ScenarioConfig`；设计说明见
 [[docs/decisions/0004-historical-regimes.md]]。
 
-## V0.4 本地驾驶舱
+## V0.6 单文件 HTML 发行版
+
+**这是最终发行形态**：一个自包含 HTML，内含 JS 经济引擎和全部 UI，
+双击或手机浏览器打开即可，不需要 Python/网络/外部资源。
+
+```text
+web/release/ecosim-v06.html
+```
+
+- 源码模块：`web/release/src/*.js`；构建：
+  `node scripts/build_release_v06.mjs`（`--check` 检查无外部资源）。
+- 已实现：V0.4 核心机制、V0.6 收入依赖需求/肉类/服务吸收/工资—生产率/
+  8h/16h/默认 free 价格、V0.5 人口/PAYG 养老金。
+- 未实现（后续 JS 分支）：A2 耐用品/废钢/土地兼并、C 完整信贷/央行反应函数。
+- 黄金对比：`node scripts/test_engine_v06.mjs`（11/11）与
+  `node scripts/compare_golden_v06.mjs --months=60|240`。
+- Python 仅作为迁移期黄金 oracle，不再新增功能。
+
+## V0.4 本地驾驶舱（诊断/oracle）
 
 前后端分离的调试/观察界面（Python 标准库 HTTP + 原生 HTML/JS/SVG，无 CDN）：
 

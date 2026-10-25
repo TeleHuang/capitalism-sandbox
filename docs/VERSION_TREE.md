@@ -32,6 +32,7 @@
 | `ca5ebeb` | V0.6 UI：产品图标、工厂点按面板、机制说明（cherry-pick 自 `feature/ui-icons` `b350714`） |
 | `727c388` | V0.6 B：工资—生产率规则、8h/16h、free 成本加成价格（cherry-pick 自 `feature/v06-wage-price` `9fbcb4d`） |
 | `8a9fdd7` | V0.6 A：收入依赖需求、肉类质量阶梯、服务吸收劳动（cherry-pick 自 `feature/v06-demand` `1d3bde4`） |
+| `4f15f01` | V0.6 单文件 HTML 发行版：JS 引擎/模块化源码/黄金对比（cherry-pick 自 `feature/html-engine` `0336132`） |
 
 ## Feature 分支
 
@@ -51,7 +52,7 @@
 | `feature/price-guidance` | `7c1d949` | 待合并/待组合测试 | opt-in 供求指导价 v1+v2；纯价格仍崩溃，默认 band |
 | `feature/v06-demand` | `1d3bde4` | 已合并 | 收入依赖需求/肉类/服务吸收（主线 `8a9fdd7`） |
 | `feature/v06-wage-price` | `9fbcb4d` | 已合并 | 工资—生产率/8h/16h/free 价格（主线 `727c388`） |
-| `feature/html-engine` | — | 进行中 | TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
+| `feature/html-engine` | `0336132` | 已合并 | TS/JS 单一逻辑源 + 单文件 HTML 核心发行版（主线 `4f15f01`） |
 | `feature/v06-durables` | — | 已取消 | A2 推迟到 JS 发行版之后 |
 
 ## UI 启动

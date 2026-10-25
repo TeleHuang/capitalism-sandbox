@@ -13,15 +13,18 @@
 - 最新提交：见 `git log -1`（V0.5 人口/退休金 + V0.6 A 需求阶梯 +
   B 工资—生产率/自由价格 + UI 图标/工厂面板）
 - Python 版本：0.6.0（迁移期 oracle；**唯一逻辑源已改为 TS/JS**）
-- JS/TS 发行引擎：`feature/html-engine` 进行中；本地 Python 驾驶舱暂时
-  仍是诊断界面，不是最终发行版。
+- **单文件发行版已可用**：`web/release/ecosim-v06.html`（约 584 KiB，双击
+  打开；JS 引擎 + UI + 图标全部内联，无外部资源）。模块源码在
+  `web/release/src/`，构建脚本 `scripts/build_release_v06.mjs`。
+- 本地 Python 驾驶舱只是诊断/oracle，不是最终发行版。
 - 测试：128 fast tests，默认快速套件 **~127s**（12 个 `@slow` skipped，全部 OK）；
   240/600/1200 月长程用 `ECOSIM_SLOW_TESTS=1` 或
   `scripts/validate_v05.py`，不再每次开发都跑。性能：240 月约 15–16s，
   60 月约 4s（优化前 131s / 21.5s）。
-- UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
-  （V0.5 人口面板 + V0.6 产品图标/工厂点按面板/机制说明已合并 `ca5ebeb`；
-  截图 `web/screenshots/v06-*.png`）
+- UI：**优先打开 `web/release/ecosim-v06.html`**（单文件发行版，含播放、
+  人口/养老金、需求/价格、工厂面板、机制说明、黄金对比）。
+  本地 Python 诊断：`python scripts/serve_dashboard.py --port 8765`。
+  截图 `web/screenshots/v06-release-*.png`。
 - 已实现：V0.4 全部机制 + V0.5 个体年龄/性别/家庭、Gompertz 死亡、
   ASFR 生育、儿童 allowance/消费、退休、PAYG 养老金（发薪/经营所得代扣）、
   `LATE_CAPITALISM`、粮食救济缓冲、土地继承/无地承接、家庭农场剩余收入。
@@ -50,6 +53,23 @@
   `profit_rate_annual`）。
 - 分支：`feature/v06-demand` `1d3bde4`、`feature/v06-wage-price` `9fbcb4d`；
   主线合并 `8a9fdd7` / `727c388`。
+
+## V0.6 单文件 HTML 发行版（`4f15f01`）
+
+- 文件：`web/release/ecosim-v06.html`（约 584 KiB，双击 / `file://` 打开）。
+- 模块源码：`web/release/src/00-core.js` … `60-ui.js`；构建：
+  `node scripts/build_release_v06.mjs`（`--check` 验证无外部资源）。
+- 已移植：V0.4 核心（11 商品/行业含服务、市场/生产/劳动/投资/会计/银行/
+  政府/MMT/JG/化肥/土地/粮食储备）、V0.6 A+B（Stone-Geary 需求、肉类、
+  服务吸收、工资—生产率/8h/16h、free 价格）、V0.5 人口/PAYG 养老金。
+- 玩家 UI：开始页、进度、播放控制、KPI/宏观/劳动/人口/货币图、
+  商品/工厂面板/产品图标/2^N 机制说明（矿类：1× 徒手采矿、2×+ 矿井设备）、
+  黄金对比页、移动布局。
+- 未实现：A2 耐用品/废钢/土地兼并、C 完整信贷/央行反应函数（已标注）。
+- 验证：Node 引擎测试 11/11；Python 黄金 oracle 60/240 月四剧本对照
+  在合理区间（GDP 偏差约 ±7%、人口/CPI/食物/服务占比接近）；
+  Chrome `file://` 截图 `web/screenshots/v06-release-*.png`。
+- 备注：JS 是唯一逻辑源；Python 只作 oracle，不再新增功能。
 
 ## V0.5 历史 240 月结果（家庭农场修复后）
 
