@@ -2,13 +2,13 @@
 
 > 这是每次会话开始时自动加载的一页交接。详细档案见
 > `docs/WORKSTREAM_V0.5.md`；人口设计与修复见
-> `docs/DEMOGRAPHICS_DESIGN.md`；价格指导价见
-> `docs/decisions/0005-guidance-prices.md`（feature/price-guidance 分支）。
+> `docs/DEMOGRAPHICS_DESIGN.md`；长程结果见 `docs/VALIDATION_V0.5.md`；
+> 价格指导价见 `docs/decisions/0005-guidance-prices.md`（feature/price-guidance 分支）。
 
 ## 当前基线
 
 - 分支：`v0.4-integration`
-- 最新提交：`8615391`（V0.5 人口/代际/退休金模块 + v0.5.1 修复 + 交接文档）
+- 最新提交：`afeebca`（V0.5 人口/代际/退休金模块 + v0.5.1 修复 + 验证文档）
 - Python 版本：0.5.0
 - 测试：88 个全绿（人口单测/不变量/测试强化；855.9s，seed=1）
 - UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
