@@ -928,6 +928,8 @@
     var investment = scalarAt("investment", index);
     var consumption = scalarAt("consumption", index);
     var profitRate = scalarAt("profit_rate", index);
+    var profitRateAnnualized = scalarAt("profit_rate_annualized", index);
+    var profitRateAnnual = scalarAt("profit_rate_annual", index);
     var profit = scalarAt("profit", index);
     var debt = scalarAt("government_debt", index);
     var deficit = scalarAt("government_deficit", index);
@@ -980,7 +982,9 @@
       kpiCard({
         label: "资本主义利润率", tag: "利润", color: "var(--series-4)", icon: "steel",
         value: fmtPct(profitRate, 2), exact: fmtPct(profitRate, 4), unit: "",
-        sub: "月度经济利润 <b>" + fmtSigned(profit, "money") + "</b> 元",
+        sub: "年化 <b>" + fmtPct(profitRateAnnualized, 2) + "</b> · 过去 12 月年化 <b>" +
+          fmtPct(profitRateAnnual, 2) + "</b><br>月度经济利润 <b>" +
+          fmtSigned(profit, "money") + "</b> 元",
         delta: previous == null ? "起始月" : deltaText(profitRate, scalarAt("profit_rate", previous), "pp"),
         spark: "profit_rate"
       }),
@@ -1061,7 +1065,9 @@
     gdp: { label: "GDP", unit: "元 / 月", color: "var(--series-1)", format: "money", includeZero: true },
     investment: { label: "投资", unit: "元 / 月", color: "var(--series-2)", format: "money", includeZero: true },
     unemployment_rate: { label: "失业率", unit: "%", color: "var(--series-3)", format: "rate", includeZero: true },
-    profit_rate: { label: "资本主义利润率", unit: "%", color: "var(--series-4)", format: "rate", includeZero: true }
+    profit_rate: { label: "资本主义利润率（月）", unit: "%", color: "var(--series-4)", format: "rate", includeZero: true },
+    profit_rate_annualized: { label: "年化利润率（月率复利）", unit: "%", color: "var(--series-5)", format: "rate", includeZero: true },
+    profit_rate_annual: { label: "过去 12 月年化利润率", unit: "%", color: "var(--series-6)", format: "rate", includeZero: true }
   };
   var MULTI_META = {
     government_debt: { label: "政府债务", color: "var(--series-1)", format: "money" },
@@ -1486,7 +1492,10 @@
   /* ------------------------------------------------------------------ */
   function renderMacroGrid(index) {
     var previous = index > 0 ? index - 1 : null;
-    var order = ["gdp", "investment", "unemployment_rate", "profit_rate"];
+    var order = [
+      "gdp", "investment", "unemployment_rate", "profit_rate",
+      "profit_rate_annualized", "profit_rate_annual"
+    ];
     refs.macroGrid.innerHTML = order.map(function (metric) {
       var meta = LINE_META[metric];
       var current = scalarAt(metric, index);

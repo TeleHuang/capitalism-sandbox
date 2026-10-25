@@ -144,6 +144,8 @@ SCALAR_FIELDS = (
     "consumption",
     "investment",
     "profit_rate",
+    "profit_rate_annualized",
+    "profit_rate_annual",
     "all_profit_rate",
     "capitalist_profit",
     "household_profit",
@@ -239,6 +241,8 @@ COMPARE_METRICS = (
 SCALAR_RATE_FIELDS = {
     "unemployment_rate",
     "profit_rate",
+    "profit_rate_annualized",
+    "profit_rate_annual",
     "average_markup",
     "birth_rate",
     "death_rate",

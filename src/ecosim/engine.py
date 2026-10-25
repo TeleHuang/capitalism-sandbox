@@ -2785,6 +2785,31 @@ class Engine:
             if capitalist_capital > 0
             else 0.0
         )
+        # 月利润率的年化：复利口径 (1+r)^12 - 1；r <= -1 时年化无定义，
+        # 记为 -100% 而不是 NaN。
+        if profit_rate <= -1.0:
+            profit_rate_annualized = -1.0
+        else:
+            profit_rate_annualized = (1.0 + profit_rate) ** 12 - 1.0
+        # 过去 12 个月（不足 12 个月按已有月数年化）的资本主义利润 /
+        # 平均资本存量；与单月利润率的资本口径一致。
+        recent_profits = [
+            stat.get("capitalist_profit", 0.0)
+            for stat in self.stats[-11:]
+        ] + [capitalist_profit]
+        recent_capitals = [
+            stat.get("capitalist_capital_stock", 0.0)
+            for stat in self.stats[-11:]
+        ] + [capitalist_capital]
+        recent_n = len(recent_profits)
+        average_capital = (
+            sum(recent_capitals) / recent_n if recent_n else 0.0
+        )
+        profit_rate_annual = (
+            (sum(recent_profits) / average_capital) * (12.0 / recent_n)
+            if average_capital > 1e-9
+            else 0.0
+        )
         all_profit_rate = total_profit / total_capital if total_capital > 0 else 0.0
         aggregate_inventory = {
             good.value: sum(
@@ -3044,6 +3069,8 @@ class Engine:
             "investment": self.market.investment_spending,
             "unemployment_rate": unemployed / max(len(labor_force), 1),
             "profit_rate": profit_rate,
+            "profit_rate_annualized": profit_rate_annualized,
+            "profit_rate_annual": profit_rate_annual,
             "all_profit_rate": all_profit_rate,
             "capital_stock": total_capital,
             "capitalist_capital_stock": capitalist_capital,
