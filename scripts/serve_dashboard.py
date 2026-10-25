@@ -39,6 +39,7 @@ from ecosim.enums import GOOD_LABELS, Good, Industry  # noqa: E402
 from ecosim.scenarios import (  # noqa: E402
     CLASSICAL_LAISSEZ_FAIRE,
     KEYNESIAN_WELFARE,
+    LATE_CAPITALISM,
     MMT_SOVEREIGN,
     ScenarioConfig,
     build_scenario_1,
@@ -54,6 +55,7 @@ REGIME_SPECS: tuple[tuple[str, str, ScenarioConfig], ...] = (
     ("classical", "古典", CLASSICAL_LAISSEZ_FAIRE),
     ("keynesian", "凯恩斯", KEYNESIAN_WELFARE),
     ("mmt", "MMT", MMT_SOVEREIGN),
+    ("late_capitalism", "晚期资本主义", LATE_CAPITALISM),
 )
 REGIME_IDS = {regime_id for regime_id, _, _ in REGIME_SPECS}
 REGIME_BY_ID = {

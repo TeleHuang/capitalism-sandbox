@@ -59,6 +59,14 @@
       demand_regime: "fixed", bank_intermediation: true,
       tax_rate_wage: 0.08, tax_rate_profit: 0.08, ui_replacement: 0.45,
       public_investment_rate: 0.08, job_guarantee: true, jg_wage: 30
+    },
+    {
+      id: "late_capitalism", label: "晚期资本主义",
+      name: "晚期资本主义（低生育/长寿/老龄化）",
+      policy_regime: "keynesian", money_regime: "gold", price_regime: "band",
+      demand_regime: "fixed", bank_intermediation: true,
+      tax_rate_wage: 0.10, tax_rate_profit: 0.10, ui_replacement: 0.40,
+      public_investment_rate: 0.12, job_guarantee: false, jg_wage: 0
     }
   ];
   var REGIME_IDS = REGIME_DEFS.map(function (regime) { return regime.id; });
