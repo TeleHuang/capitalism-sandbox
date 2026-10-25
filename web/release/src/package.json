@@ -1,0 +1,6 @@
+{
+  "name": "ecosim-v06-engine-source",
+  "private": true,
+  "type": "module",
+  "description": "ES-module source for the single-file EcoSim V0.6 release"
+}

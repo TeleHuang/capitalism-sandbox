@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="EcoSim V0.6 单文件经济模拟器：全部经济逻辑与界面内联，无网络、无外部资源。">
+<title>EcoSim V0.6 · 资本主义经济模拟</title>
+<style>
+/*__STYLES__*/
+</style>
+</head>
+<body>
+<div id="error-banner" hidden role="alert" aria-live="assertive">
+  <div class="error-mark" aria-hidden="true">!</div>
+  <div class="error-copy"><strong>页面脚本错误</strong><span id="error-text"></span></div>
+  <button id="error-close" class="error-close" type="button" aria-label="关闭错误提示">×</button>
+</div>
+
+<noscript>
+  <div style="padding:40px;text-align:center">此单文件发行版需要启用 JavaScript 才能运行仿真。</div>
+</noscript>
+
+<!-- ======================= 开始界面 ======================= -->
+<section id="start-screen" class="screen" aria-label="运行设置">
+  <div class="start-card">
+    <div class="eyebrow">ECOSIM / V0.6 / SINGLE-FILE RELEASE</div>
+    <h1>资本主义经济<br>模拟器</h1>
+    <p class="lead">一个封闭经济的月度沙盒：<strong>11 种商品、11 个行业、家庭需求、劳动市场、投资、银行、政府与土地</strong>。所有仿真逻辑与界面都在这一个 HTML 文件里，双击即可离线运行。</p>
+    <p class="honesty">本发行版覆盖 V0.4 核心机制、V0.6 A+B（收入依赖需求、肉类/畜牧业、服务业吸收、工资—生产率规则、默认 free 价格制度）与 V0.5 人口/养老金。<strong>A2 耐用品（衣服/住房/汽车寿命、废钢、土地兼并）与 C 信用/央行反应函数（贷款创造存款、准备金/资本约束）尚未实现</strong>；引擎已预留扩展点，界面会明确标注。</p>
+
+    <div class="start-section">
+      <h2>选择历史制度</h2>
+      <div id="regime-grid" class="regime-grid" role="radiogroup" aria-label="历史制度"></div>
+    </div>
+
+    <div class="start-section">
+      <h2>运行参数</h2>
+      <div class="control-grid">
+        <div class="field">
+          <label for="seed-input">随机种子</label>
+          <input id="seed-input" type="number" min="0" max="2147483647" step="1" value="1" inputmode="numeric">
+          <small>同一 seed + 制度 + 月数可复现同一条运行轨迹。</small>
+        </div>
+        <div class="field">
+          <label>运行月数</label>
+          <div id="months-seg" class="seg" role="group" aria-label="运行月数">
+            <button type="button" data-months="60">60 月</button>
+            <button type="button" data-months="120">120 月</button>
+            <button type="button" data-months="240" class="active">240 月</button>
+          </div>
+          <small>金标准对比只覆盖 60 / 240 月（seed=1）。不运行 1200 月慢测。</small>
+        </div>
+        <div class="field">
+          <label for="price-regime">价格制度</label>
+          <select id="price-regime">
+            <option value="free" selected>free · 自由成本加成（V0.6 默认）</option>
+            <option value="band">band · 参考价 + 成本带（旧制度）</option>
+            <option value="markup_soft">markup_soft · 软成本走廊（旧制度）</option>
+          </select>
+          <small>free 不向界面暴露成本地板/天花板；亏损、减产和退出都是正常信号。</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="start-actions">
+      <button id="start-run" class="run-button" type="button">开始运行仿真</button>
+      <span class="run-note">JavaScript 引擎 · 浏览器内计算 · 无网络请求</span>
+    </div>
+    <div class="feature-strip" aria-label="功能覆盖">
+      <span class="tag green">V0.4 核心</span>
+      <span class="tag green">V0.6 需求/工资/free</span>
+      <span class="tag green">V0.5 人口/养老金</span>
+      <span class="tag blue">11 商品 / 11 行业</span>
+      <span class="tag amber">A2 耐用品：延期</span>
+      <span class="tag amber">C 信贷反应函数：延期</span>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 主界面 ======================= -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="brand">
+      <div class="eyebrow" id="run-eyebrow">ECOSIM / V0.6 / PLAYER COCKPIT</div>
+      <h1 id="run-title">经济驾驶舱</h1>
+      <p class="lede">逐月仿真快照 · 价格/产量/份额/工厂面板 · 与 Python 迁移 oracle 的黄金对比</p>
+      <div class="meta-strip">
+        <span id="run-meta">—</span>
+        <span class="sep">/</span>
+        <span id="run-seed">—</span>
+        <span class="sep">/</span>
+        <span>单文件 · 无外部资源</span>
+      </div>
+    </div>
+    <div class="status-cluster">
+      <div class="status-pill"><span class="status-dot" aria-hidden="true"></span><span>JS ENGINE / IN-BROWSER</span></div>
+      <div class="status-caption" id="run-status-caption">—</div>
+      <button id="new-run" class="step-btn" type="button" title="返回开始界面，重新选择制度/seed/月数">↺ 新运行</button>
+    </div>
+  </header>
+
+  <section class="control-deck" aria-label="时间轴">
+    <div>
+      <div class="clock-row">
+        <div class="month-readout"><strong id="month-value">T—</strong><span id="month-total">/ — 月</span></div>
+        <div class="step-controls">
+          <button id="prev-month" class="step-btn" type="button">上一月</button>
+          <button id="play-timeline" class="play-btn" type="button">▶ 逐月播放</button>
+          <button id="next-month" class="step-btn" type="button">下一月</button>
+        </div>
+      </div>
+      <div class="timeline-wrap">
+        <input id="month-slider" class="timeline" type="range" min="1" max="240" value="240" step="1" aria-label="仿真月份">
+        <div id="timeline-scale" class="timeline-scale"></div>
+      </div>
+      <div id="run-progress" class="progress-line hidden">
+        <span id="progress-label">正在运行</span>
+        <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+        <span id="progress-pct">0%</span>
+      </div>
+    </div>
+    <div class="deck-side">
+      <div class="side-title">当前制度</div>
+      <div class="side-value" id="deck-regime">—</div>
+      <div class="side-note" id="deck-note">—</div>
+    </div>
+  </section>
+
+  <nav class="tabs" aria-label="视图切换">
+    <button class="tab-btn active" type="button" data-view="overview">总览</button>
+    <button class="tab-btn" type="button" data-view="markets">市场</button>
+    <button class="tab-btn" type="button" data-view="factories">工厂</button>
+    <button class="tab-btn" type="button" data-view="mechanism">机制</button>
+    <button class="tab-btn" type="button" data-view="parity">黄金对比</button>
+    <button class="tab-btn" type="button" data-view="data">数据 / 警告</button>
+  </nav>
+
+  <main>
+    <!-- 总览 -->
+    <section id="view-overview" class="view">
+      <div id="kpi-grid" class="kpi-grid"></div>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">MACRO</span><h2>宏观轨迹</h2><p class="panel-sub">GDP / 消费 / 投资（元/月）</p></div><span class="panel-note">截至当前月</span></header>
+          <div class="panel-body"><div id="chart-macro" class="chart-host"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">LABOR &amp; PROFIT</span><h2>失业率与利润率</h2><p class="panel-sub">失业率为劳动年龄人口占比；利润率为资本主义企业口径</p></div><span class="panel-note">% / 月</span></header>
+          <div class="panel-body"><div id="chart-labor" class="chart-host"></div></div>
+        </article>
+      </div>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">DEMAND MIX</span><h2>消费结构</h2><p class="panel-sub">食品 / 肉类 / 衣物 / 住房 / 服务的预算份额（含资本家消费）</p></div><span class="panel-note">V0.6 Stone-Geary</span></header>
+          <div class="panel-body"><div id="chart-shares" class="chart-host"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">PRICES</span><h2>关键价格</h2><p class="panel-sub">参考价 · 点击卡片打开对应工厂面板</p></div><span class="panel-note">元 / 单位</span></header>
+          <div class="panel-body"><div id="mini-prices" class="mini-grid"></div></div>
+        </article>
+      </div>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">POPULATION</span><h2>人口与出生/死亡</h2><p class="panel-sub">V0.5 人口过程；出生与死亡为月度流量</p></div><span class="panel-note">人</span></header>
+          <div class="panel-body"><div id="chart-population" class="chart-host"></div><div id="population-facts" class="fact-grid"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">MONEY &amp; STATE</span><h2>货币、银行与政府</h2><p class="panel-sub">货币总量、银行贷款/存款、政府债务与央行货币</p></div><span class="panel-note">元</span></header>
+          <div class="panel-body"><div id="chart-money" class="chart-host"></div><div id="money-facts" class="fact-grid"></div></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 市场 -->
+    <section id="view-markets" class="view hidden">
+      <div class="section-heading"><div><span class="kicker">MARKET LAYERS</span><h2>商品市场</h2></div><p class="section-note">价格、产量、需求、供给、成交与库存 · 点击卡片查看工厂</p></div>
+      <div id="market-grid" class="mini-grid"></div>
+      <div class="section-heading"><div><span class="kicker">GOODS TABLE</span><h2>商品明细</h2></div><p class="section-note">当前月快照</p></div>
+      <article class="panel"><div class="panel-body"><div id="goods-table"></div></div></article>
+    </section>
+
+    <!-- 工厂 -->
+    <section id="view-factories" class="view hidden">
+      <div class="section-heading"><div><span class="kicker">FACTORIES</span><h2>行业与工厂</h2></div><p class="section-note">企业数 / 就业 / 产量 / 产能 / 设备 · 点击打开 2^N 机制面板</p></div>
+      <div id="industry-grid" class="industry-grid"></div>
+      <div class="section-heading"><div><span class="kicker">PRODUCTION</span><h2>行业明细</h2></div><p class="section-note">名义产能按熟练度 1 汇总后再乘当前平均熟练度</p></div>
+      <article class="panel"><div class="panel-body"><div id="industry-table"></div></div></article>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">LAND</span><h2>土地与农业</h2><p class="panel-sub">自耕农 / 资本主义农场 / 待售遗产地</p></div></header>
+          <div class="panel-body"><div id="land-panel"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">INVESTMENT</span><h2>在建项目</h2><p class="panel-sub">按行业的活跃投资项目数</p></div></header>
+          <div class="panel-body"><div id="project-panel"></div></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 机制 -->
+    <section id="view-mechanism" class="view hidden">
+      <div class="section-heading"><div><span class="kicker">MECHANISM</span><h2>机制说明</h2></div><p class="section-note">投入→产出、2^N 设备阶梯、矿业术语、需求与工资—价格规则</p></div>
+      <div class="panel-grid">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">RECIPES</span><h2>投入 → 产出</h2><p class="panel-sub">点击行业行打开工厂面板</p></div><span class="panel-note">11 行业</span></header>
+          <div class="panel-body"><div id="recipe-chain" class="recipe-list"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">SCALE</span><h2>2^N 设备阶梯</h2><p class="panel-sub">产能翻倍、满产用工 +1；t0 可为手工设备</p></div><select id="scale-sector" aria-label="选择行业" style="max-width:160px;padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:#0b131a"></select></header>
+          <div class="panel-body"><div id="scale-panel"></div></div>
+        </article>
+      </div>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">DEMAND</span><h2>V0.6 收入依赖需求</h2><p class="panel-sub">Stone-Geary：生存底线 + 收入依赖的边际预算份额</p></div></header>
+          <div class="panel-body"><div id="demand-mechanism"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">WAGE–PRICE</span><h2>工资—生产率与 free 价格</h2><p class="panel-sub">工资目标、通胀预期、成本加成、需求/库存调整</p></div></header>
+          <div class="panel-body"><div id="wage-mechanism"></div></div>
+        </article>
+      </div>
+      <article class="panel" style="margin-top:10px">
+        <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">COVERAGE</span><h2>已移植 / 延期 / 扩展点</h2><p class="panel-sub">诚实的功能覆盖表；本页面不会把延期机制说成已实现</p></div></header>
+        <div class="panel-body"><div id="feature-coverage" class="feature-grid"></div></div>
+      </article>
+    </section>
+
+    <!-- 黄金对比 -->
+    <section id="view-parity" class="view hidden">
+      <div class="section-heading"><div><span class="kicker">GOLDEN RUNS</span><h2>与 Python 迁移 oracle 的对比</h2></div><p class="section-note">固定 seed=1 · free 价格 · geary 需求 · 采集月份 T1/6/12/24/36/48/60/120/180/240</p></div>
+      <div id="parity-banner" class="parity-banner"></div>
+      <article class="panel" style="margin-top:10px"><div class="panel-body"><div id="parity-table"></div></div></article>
+      <div class="section-heading"><div><span class="kicker">METHOD</span><h2>口径与已知偏差</h2></div></div>
+      <article class="panel"><div class="panel-body"><div id="parity-method"></div></div></article>
+    </section>
+
+    <!-- 数据 -->
+    <section id="view-data" class="view hidden">
+      <div class="section-heading"><div><span class="kicker">DIAGNOSTICS</span><h2>数据与警告</h2></div><p class="section-note">当前月引擎快照</p></div>
+      <div class="panel-grid">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">WARNINGS</span><h2>引擎警告</h2><p class="panel-sub">货币漂移、零产出、饥荒救济/养老金缺口等</p></div></header>
+          <div class="panel-body"><div id="warning-panel"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">ACCOUNTS</span><h2>利润表 / 银行 / 政府</h2><p class="panel-sub">当月流量与存量口径</p></div></header>
+          <div class="panel-body"><div id="account-panel"></div></div>
+        </article>
+      </div>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">POPULATION</span><h2>人口结构</h2><p class="panel-sub">年龄桶 / 生活标准 / 抚养比</p></div></header>
+          <div class="panel-body"><div id="population-table"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">HOUSEHOLDS</span><h2>家庭需求目标</h2><p class="panel-sub">成人平均目标量 / 平均消费预算</p></div></header>
+          <div class="panel-body"><div id="demand-table"></div></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer style="margin-top:28px;padding-top:14px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:10.5px;line-height:1.6">
+    EcoSim V0.6 · 单文件发行版 · JavaScript 引擎在浏览器内运行，无网络、无 CDN、无外部字体/图片。
+    黄金对比来自 Python 迁移 oracle（`scripts/export_golden_v06.py`），目标为合理区间而非逐位一致。
+  </footer>
+</div>
+
+<!-- ======================= 工厂面板 ======================= -->
+<div id="factory-overlay" class="overlay" hidden>
+  <div class="factory-modal" role="dialog" aria-modal="true" aria-labelledby="factory-title">
+    <div class="factory-head">
+      <div id="factory-icon" class="factory-icon"></div>
+      <div class="factory-title-wrap">
+        <span class="kicker">FACTORY / INDUSTRY PANEL</span>
+        <h2 id="factory-title">工厂</h2>
+        <p id="factory-sub" class="factory-sub"></p>
+      </div>
+      <button id="factory-close" class="factory-close" type="button" aria-label="关闭工厂面板">×</button>
+    </div>
+    <div id="factory-body" class="factory-body"></div>
+  </div>
+</div>
+
+<script id="golden-data" type="application/json">/*__GOLDEN__*/</script>
+<script>
+/*__BUNDLE__*/
+</script>
+</body>
+</html>
