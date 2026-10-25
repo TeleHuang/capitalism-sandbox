@@ -536,9 +536,26 @@ def _sector_metadata() -> list[dict[str, Any]]:
                 "capital_goods": capital_goods,
                 "max_firms": params.max_firms,
                 "is_resource": bool(params.is_resource),
+                "note": _sector_note(industry),
             }
         )
     return sectors
+
+
+def _sector_note(industry: Industry) -> str:
+    """面向玩家的机制说明；尤其修正矿类“矿井”术语。"""
+    if industry in (Industry.COAL_MINE, Industry.IRON_MINE):
+        return (
+            "矿类简化：没有“矿井”这个生产资料，也没有独立的勘探→建井→耗尽阶段。"
+            "徒手找矿就是挖矿，t0 是徒手采矿 1×；t1–t7 才是矿井设备 2×…128×，"
+            "由机械厂生产。"
+        )
+    if industry == Industry.AGRICULTURE:
+        return (
+            "农业：土地是初始自然资源；农机功率决定一个劳动力能管理多少亩，"
+            "不直接提高亩产；亩产由土地、熟练度和化肥决定。"
+        )
+    return ""
 
 
 def _fallback_sector(industry_id: str, output: str | None) -> dict[str, Any]:
@@ -558,6 +575,7 @@ def _fallback_sector(industry_id: str, output: str | None) -> dict[str, Any]:
         "capital_goods": [],
         "max_firms": None,
         "is_resource": False,
+        "note": "",
         "unknown": True,
     }
 

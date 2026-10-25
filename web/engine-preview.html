@@ -786,9 +786,12 @@
         cost = upgradeCost * Math.pow(2, n - 1);
         good = capitalGood;
       }
+      const tierLabel = n === 0 && (prefix === "coal" || prefix === "iron")
+        ? "徒手采矿"
+        : label;
       EQUIPMENT[key] = {
         key,
-        label: `${label} ${Math.pow(2, n)}×`,
+        label: `${tierLabel} ${Math.pow(2, n)}×`,
         industry,
         capacity: baseCapacity * Math.pow(2, n),
         workers: powerBase > 0 ? 0 : baseWorkers + n,
@@ -802,8 +805,8 @@
   }
   makeEquipmentTiers("farm", "agriculture", "农机", 0, 0, "machinery", 1.0, 2.0, 2, 1.0);
   [
-    ["coal", "coal_mine", "手工矿井", 10.0, 10, "machinery", 0.0, 2.0, 0],
-    ["iron", "iron_mine", "手工矿井", 10.0, 10, "machinery", 0.0, 2.0, 0],
+    ["coal", "coal_mine", "矿井设备", 10.0, 10, "machinery", 0.0, 2.0, 0],
+    ["iron", "iron_mine", "矿井设备", 10.0, 10, "machinery", 0.0, 2.0, 0],
     ["steel", "steel_mill", "炼钢炉", 50.0, 3, "brick", 1000.0, 2000.0, 2],
     ["brick", "brick_factory", "砖窑", 100.0, 50, "brick", 300.0, 600.0, 2],
     ["textile", "textile_mill", "织机", 50.0, 1, "machinery", 0.0, 5.0, 1],

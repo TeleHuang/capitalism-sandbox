@@ -108,6 +108,11 @@ class SectorMetadataTests(unittest.TestCase):
         # 农机功率翻倍但产能字段为 0：农业产出由土地决定，不由设备 capacity 决定。
         self.assertEqual(farm["equipment_tiers"][0]["capacity"], 0.0)
 
+        coal = by_id["coal_mine"]
+        self.assertTrue(coal["equipment_tiers"][0]["label"].startswith("徒手采矿"))
+        self.assertTrue(coal["equipment_tiers"][1]["label"].startswith("矿井设备"))
+        self.assertIn("没有“矿井”这个生产资料", coal["note"])
+
         service = by_id["service"]
         self.assertEqual(len(service["equipment_tiers"]), 1)
         self.assertFalse(service["capital_goods"])

@@ -194,6 +194,7 @@ def _make_equipment_tiers(
     upgrade_cost: float,
     base_build_months: int,
     power_base: float = 0.0,
+    t0_label: str | None = None,
 ) -> Dict[str, EquipmentType]:
     """生成 8 个 2 的 N 次方设备等级。
 
@@ -211,7 +212,9 @@ def _make_equipment_tiers(
             good = capital_good
         result[key] = EquipmentType(
             key=key,
-            label=f"{label} {2 ** n}×",
+            label=(
+                f"{t0_label if n == 0 and t0_label else label} {2 ** n}×"
+            ),
             industry=industry,
             capacity=base_capacity * (2 ** n),
             workers=0 if power_base > 0 else base_workers + n,
@@ -233,8 +236,10 @@ EQUIPMENT.update(
     )
 )
 for prefix, industry, label, capacity, workers, good, t0, upgrade, build in [
-    ("coal", Industry.COAL_MINE, "手工矿井", 10.0, 10, Good.MACHINERY, 0.0, 2.0, 0),
-    ("iron", Industry.IRON_MINE, "手工矿井", 10.0, 10, Good.MACHINERY, 0.0, 2.0, 0),
+    # 矿类没有“矿井”这个生产资料：徒手找矿=挖矿，1× 是徒手采矿；
+    # 2×+ 才是矿井设备（机械厂生产）。
+    ("coal", Industry.COAL_MINE, "矿井设备", 10.0, 10, Good.MACHINERY, 0.0, 2.0, 0),
+    ("iron", Industry.IRON_MINE, "矿井设备", 10.0, 10, Good.MACHINERY, 0.0, 2.0, 0),
     ("steel", Industry.STEEL_MILL, "炼钢炉", 50.0, 3, Good.BRICK, 1000.0, 2000.0, 2),
     ("brick", Industry.BRICK_FACTORY, "砖窑", 100.0, 50, Good.BRICK, 300.0, 600.0, 2),
     ("textile", Industry.TEXTILE_MILL, "织机", 50.0, 1, Good.MACHINERY, 0.0, 5.0, 1),
@@ -250,6 +255,7 @@ for prefix, industry, label, capacity, workers, good, t0, upgrade, build in [
             base_capacity=capacity, base_workers=workers,
             capital_good=good, t0_cost=t0, upgrade_cost=upgrade,
             base_build_months=build,
+            t0_label="徒手采矿" if prefix in ("coal", "iron") else None,
         )
     )
 

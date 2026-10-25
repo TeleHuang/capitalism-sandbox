@@ -1985,7 +1985,9 @@
           : sector.id === "service"
             ? "服务业产出 = 手工服务摊数量 × 劳动利用率 × 熟练度；没有资本品和 2^N 设备。"
             : "工业产出 = 设备产能 × min(计划, 有效劳动/所需劳动) × 平均熟练度，并受投入品库存约束。") +
-        '</p>' + tierTableHtml(sector)
+        '</p>' +
+        (sector.note ? '<p class="mechanism-note">' + escapeHtml(sector.note) + '</p>' : "") +
+        tierTableHtml(sector)
       : '<p class="mechanism-note">该商品没有对应的本地行业配方；以下仅为价格与产量统计。' +
         (industryId ? "行业 " + escapeHtml(industryId) + " 来自 stats，但服务端没有它的 SECTOR_PARAMS。" : "") + '</p>';
 
@@ -2000,6 +2002,11 @@
       scaleBody = '<p class="factory-explain">农机 t0–t7 的功率为 1×、2×、4×…128×：每级翻倍，' +
         '使每个劳动力可管理的土地成倍增加，但<b>不改变亩产</b>。亩产由土地、熟练度和化肥决定。' +
         '资本主义农场通过土地市场扩大面积，再购买更高功率农机。</p>' +
+        '<div class="factory-tier-bars">' + scaleBarsHtml(sector, true) + '</div>';
+    } else if (sector.id === "coal_mine" || sector.id === "iron_mine") {
+      scaleBody = '<p class="factory-explain">矿类没有“矿井”生产资料或独立勘探阶段：' +
+        '徒手找矿=挖矿，t0 是<b>徒手采矿 1×</b>；t1–t7 是<b>矿井设备</b> 2×…128×，' +
+        '由机械厂生产。每级产能翻倍、满产用工 +1，设备本身不是矿井资产。</p>' +
         '<div class="factory-tier-bars">' + scaleBarsHtml(sector, true) + '</div>';
     } else {
       var tiers = sectorTiers(sector);
