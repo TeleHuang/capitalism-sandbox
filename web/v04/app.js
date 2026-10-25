@@ -95,9 +95,17 @@
   var REGIME_BY_ID = {};
   var GOODS = [];
   var INDUSTRIES = [];
+  var SECTORS = [];
+  var MECHANISM = null;
   var GOOD_BY_ID = {};
   var INDUSTRY_BY_ID = {};
+  var SECTOR_BY_ID = {};
+  var SECTOR_BY_OUTPUT = {};
   var MONTHS = API_MONTHS;
+  var SCALE_SECTOR_ID = null;
+  var FACTORY_PARAM = query.get("factory");
+  var SCROLL_PARAM = query.get("scroll");
+  var factoryState = { open: false, trigger: null };
 
   function rebuildRegimeIndex() {
     REGIME_BY_ID = {};
@@ -110,6 +118,17 @@
   function rebuildIndustryIndex() {
     INDUSTRY_BY_ID = {};
     INDUSTRIES.forEach(function (industry) { INDUSTRY_BY_ID[industry.id] = industry; });
+  }
+  function rebuildSectorIndex() {
+    SECTOR_BY_ID = {};
+    SECTOR_BY_OUTPUT = {};
+    SECTORS.forEach(function (sector) {
+      SECTOR_BY_ID[sector.id] = sector;
+      if (sector.output && !SECTOR_BY_OUTPUT[sector.output]) SECTOR_BY_OUTPUT[sector.output] = sector;
+    });
+    if (!SCALE_SECTOR_ID || !SECTOR_BY_ID[SCALE_SECTOR_ID]) {
+      SCALE_SECTOR_ID = SECTOR_BY_ID.agriculture ? "agriculture" : (SECTORS[0] && SECTORS[0].id) || null;
+    }
   }
   rebuildRegimeIndex();
 
@@ -140,6 +159,23 @@
     priceGrid: document.getElementById("price-grid"),
     productionGrid: document.getElementById("production-grid"),
     diagnosticsGrid: document.getElementById("diagnostics-grid"),
+    recipeChain: document.getElementById("recipe-chain"),
+    scaleSector: document.getElementById("scale-sector"),
+    scaleChart: document.getElementById("scale-chart"),
+    scaleFacts: document.getElementById("scale-facts"),
+    scaleNote: document.getElementById("scale-note"),
+    landBar: document.getElementById("land-bar"),
+    landFacts: document.getElementById("land-facts"),
+    landNote: document.getElementById("land-note"),
+    consumptionFacts: document.getElementById("consumption-facts"),
+    hungerChart: document.getElementById("hunger-chart"),
+    hungerNote: document.getElementById("hunger-note"),
+    lifeStage: document.getElementById("life-stage"),
+    pensionFactsMech: document.getElementById("pension-facts-mech"),
+    factoryOverlay: document.getElementById("factory-overlay"),
+    factoryModal: document.getElementById("factory-modal"),
+    factoryClose: document.getElementById("factory-close"),
+    factoryBody: document.getElementById("factory-body"),
     footerEngine: document.getElementById("footer-engine"),
     footerGenerated: document.getElementById("footer-generated"),
     bootPlaceholder: document.getElementById("boot-placeholder"),
@@ -242,9 +278,13 @@
       if (Array.isArray(META.regimes) && META.regimes.length) REGIMES = META.regimes;
       GOODS = Array.isArray(META.goods) ? META.goods : [];
       INDUSTRIES = Array.isArray(META.industries) ? META.industries : [];
+      SECTORS = Array.isArray(META.sectors) && META.sectors.length ? META.sectors : [];
+      MECHANISM = META.mechanism || null;
       rebuildRegimeIndex();
       rebuildGoodIndex();
       rebuildIndustryIndex();
+      rebuildSectorIndex();
+      rebuildScaleSectorOptions();
       var actualMonths = Number(META.months);
       if (Number.isFinite(actualMonths) && actualMonths > 0 && actualMonths !== MONTHS) {
         MONTHS = actualMonths;
@@ -404,6 +444,10 @@
     setControlsLocked(true);
     renderRuntimeBadges();
     switchRegime(INITIAL_REGIME, true).then(function () {
+      // 可选：?factory=steel_mill 直接打开工厂面板、?scroll=mechanism 定位区块
+      // （便于分享与截图验证）。
+      if (FACTORY_PARAM) window.setTimeout(openFactoryFromQuery, 280);
+      if (SCROLL_PARAM) window.setTimeout(scrollToQueryTarget, 320);
       // 先让默认制度落到屏幕上，再在后台预取另外两个。
       window.setTimeout(prefetchRemaining, 700);
     }).catch(function () {
@@ -478,6 +522,179 @@
   function fmtMonths(value) {
     if (!Number.isFinite(Number(value))) return "—";
     return fmtNum(value, 1) + " 个月";
+  }
+  function goodUnit(id) {
+    var good = GOOD_BY_ID[id];
+    return (good && good.unit) || "单位";
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 卡通产品图标（全部内联 SVG，无外部资源）                            */
+  /* ------------------------------------------------------------------ */
+  var ICON_STROKE = 'stroke="#071014" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"';
+
+  function iconWrap(body) {
+    return '<svg class="good-icon" viewBox="0 0 40 40" aria-hidden="true" focusable="false">' +
+      body + "</svg>";
+  }
+
+  var ICONS = {
+    food: function () {
+      return iconWrap(
+        '<path d="M12 17c0-3 3-5 8-5s8 2 8 5l3 14c.6 2.6-1 4.6-3.8 4.6H12.8C10 35.6 8.4 33.6 9 31z" fill="#dda95a" ' + ICON_STROKE + '/>' +
+        '<path d="M15 13c0-2.4 2.1-4.2 5-4.2s5 1.8 5 4.2l-2 3.4h-6z" fill="#b47632" ' + ICON_STROKE + '/>' +
+        '<path d="M17 9.5l3-4 3 4" fill="none" stroke="#7c4d1f" stroke-width="2" stroke-linecap="round"/>' +
+        '<circle cx="17" cy="24" r="1.3" fill="#8b5a24"/>' +
+        '<circle cx="22.5" cy="27" r="1.3" fill="#8b5a24"/>' +
+        '<circle cx="20" cy="20" r="1.3" fill="#8b5a24"/>' +
+        '<path d="M14 31.5c4-1 8-1 12 0" fill="none" stroke="#b47632" stroke-width="1.5" opacity=".7"/>'
+      );
+    },
+    coal: function () {
+      return iconWrap(
+        '<path d="M8 27l3-11 8-5 11 3 3 9-7 8-12 1z" fill="#3f4c56" ' + ICON_STROKE + '/>' +
+        '<path d="M11 16l8-5 5 6-7 5z" fill="#5b6b77" stroke="none"/>' +
+        '<path d="M19 22l7-5 3 6-6 4z" fill="#2e3840" stroke="none"/>' +
+        '<path d="M10 23l4-2M24 27l4-2" stroke="#92a4b1" stroke-width="1.6" fill="none" opacity=".65"/>'
+      );
+    },
+    iron_ore: function () {
+      return iconWrap(
+        '<path d="M9 29l2-10 7-7 9 2 5 9-4 9-11 2z" fill="#8d8171" ' + ICON_STROKE + '/>' +
+        '<path d="M12 19l6-5 4 4-6 5z" fill="#aa9b84" stroke="none"/>' +
+        '<circle cx="23" cy="24" r="2.1" fill="#b25b44" stroke="none"/>' +
+        '<circle cx="16" cy="26" r="1.5" fill="#b25b44" stroke="none"/>' +
+        '<path d="M11 30l18-1M22 10l2 5" stroke="#6c6256" stroke-width="1.4" fill="none" opacity=".8"/>'
+      );
+    },
+    steel: function () {
+      return iconWrap(
+        '<g transform="rotate(-8 20 20)">' +
+        '<path d="M8 7h24v6h-8v14h8v6H8v-6h8V13H8z" fill="#7fa2bf" ' + ICON_STROKE + '/>' +
+        '<path d="M10 9h20v2H10z" fill="#c2dced" stroke="none"/>' +
+        '<path d="M19 13h2v14h-2z" fill="#a9c8dd" stroke="none"/>' +
+        '<circle cx="12" cy="10" r="1" fill="#e8f4fb" stroke="none"/>' +
+        '<circle cx="28" cy="30" r="1" fill="#e8f4fb" stroke="none"/>' +
+        '</g>'
+      );
+    },
+    brick: function () {
+      return iconWrap(
+        '<g transform="rotate(-2 20 22)">' +
+        '<rect x="6" y="15" width="14" height="9" rx="1.6" fill="#c15a3f" ' + ICON_STROKE + '/>' +
+        '<rect x="22" y="15" width="12" height="9" rx="1.6" fill="#b04c36" ' + ICON_STROKE + '/>' +
+        '<rect x="10" y="26" width="20" height="9" rx="1.6" fill="#cf7050" ' + ICON_STROKE + '/>' +
+        '<path d="M9 17.5h8M24 17.5h7M14 28.5h11" stroke="#f1d3bd" stroke-width="1.3" stroke-linecap="round" opacity=".8"/>' +
+        '</g>'
+      );
+    },
+    cloth: function () {
+      return iconWrap(
+        '<path d="M15 7l5 3 5-3 9 5-4.5 8-3.5-2v13.5H14V18l-3.5 2L6 12z" fill="#4fa89a" ' + ICON_STROKE + '/>' +
+        '<path d="M15 7l5 3 5-3" fill="none" stroke="#2f6f66" stroke-width="1.8"/>' +
+        '<path d="M20 13v18.5" stroke="#2f6f66" stroke-width="1.3"/>' +
+        '<circle cx="20" cy="19" r="1.2" fill="#e9f5ef"/>' +
+        '<circle cx="20" cy="24" r="1.2" fill="#e9f5ef"/>' +
+        '<path d="M8.5 12.5l2.5 5M31.5 12.5l-2.5 5" stroke="#2f6f66" stroke-width="1.2"/>'
+      );
+    },
+    fertilizer: function () {
+      return iconWrap(
+        '<path d="M12 12h16l2 17.5c.3 2.4-1.3 4-3.5 4H13.5C11.3 33.5 9.7 32 10 29.5z" fill="#6f9c46" ' + ICON_STROKE + '/>' +
+        '<path d="M14 8h12l2.5 4.5h-17z" fill="#507a2f" ' + ICON_STROKE + '/>' +
+        '<path d="M20 17.5c-4.5 0-7 3-7 6.5 4.5 0 7-2.5 7-6.5z" fill="#c8e6a0" stroke="none"/>' +
+        '<path d="M20 17.5c4.5 0 7 3 7 6.5-4.5 0-7-2.5-7-6.5z" fill="#a8d478" stroke="none"/>' +
+        '<path d="M20 24v6" stroke="#e9f5d8" stroke-width="1.6" stroke-linecap="round"/>'
+      );
+    },
+    machinery: function () {
+      return iconWrap(
+        '<g fill="#d68f2e" ' + ICON_STROKE + '>' +
+        '<rect x="17" y="1.5" width="6" height="10" rx="1.4"/>' +
+        '<rect x="17" y="28.5" width="6" height="10" rx="1.4"/>' +
+        '<rect x="1.5" y="17" width="10" height="6" rx="1.4"/>' +
+        '<rect x="28.5" y="17" width="10" height="6" rx="1.4"/>' +
+        '<rect x="5" y="5" width="6" height="10" rx="1.4" transform="rotate(-45 8 10)"/>' +
+        '<rect x="24" y="5" width="6" height="10" rx="1.4" transform="rotate(45 27 10)"/>' +
+        '<rect x="5" y="25" width="6" height="10" rx="1.4" transform="rotate(45 8 30)"/>' +
+        '<rect x="24" y="25" width="6" height="10" rx="1.4" transform="rotate(-45 27 30)"/>' +
+        '</g>' +
+        '<circle cx="20" cy="20" r="11" fill="#e0a03c" ' + ICON_STROKE + '/>' +
+        '<circle cx="20" cy="20" r="4.3" fill="#26323a" stroke="#071014" stroke-width="1.5"/>'
+      );
+    },
+    building: function () {
+      return iconWrap(
+        '<path d="M20 4L3.5 18h33z" fill="#b8583f" ' + ICON_STROKE + '/>' +
+        '<rect x="9" y="18" width="22" height="16" rx="1" fill="#d8c097" ' + ICON_STROKE + '/>' +
+        '<rect x="17" y="25" width="7" height="9" rx="1" fill="#7b4c2f" stroke="#071014" stroke-width="1.5"/>' +
+        '<rect x="11.5" y="21" width="4" height="4" rx=".8" fill="#9fd7e8" stroke="#071014" stroke-width="1.2"/>' +
+        '<rect x="24.5" y="21" width="4" height="4" rx=".8" fill="#9fd7e8" stroke="#071014" stroke-width="1.2"/>'
+      );
+    },
+    service: function () {
+      return iconWrap(
+        '<rect x="8" y="17" width="24" height="17" rx="1.5" fill="#c98a5e" ' + ICON_STROKE + '/>' +
+        '<path d="M5 12h30l-3.5 8H8.5z" fill="#3f9d8f" ' + ICON_STROKE + '/>' +
+        '<path d="M12.5 12.5L11 19.5M20 12.5v7M27.5 12.5l1.5 7" stroke="#dff3ee" stroke-width="2.2" stroke-linecap="round"/>' +
+        '<rect x="16.5" y="23" width="7" height="11" rx="1" fill="#5b3a28" stroke="#071014" stroke-width="1.4"/>' +
+        '<rect x="9.5" y="22.5" width="4" height="4" rx=".8" fill="#9fd7e8" stroke="#071014" stroke-width="1.2"/>'
+      );
+    },
+    person: function () {
+      return iconWrap(
+        '<circle cx="20" cy="11.5" r="6.2" fill="#6cb3e6" ' + ICON_STROKE + '/>' +
+        '<path d="M8 34c0-7 4.8-12.4 12-12.4S32 27 32 34z" fill="#3987e5" ' + ICON_STROKE + '/>'
+      );
+    },
+    coin: function () {
+      return iconWrap(
+        '<circle cx="20" cy="20" r="14" fill="#e5b93c" ' + ICON_STROKE + '/>' +
+        '<circle cx="20" cy="20" r="9.5" fill="#f2cd66" stroke="#8a6510" stroke-width="1.6"/>' +
+        '<text x="20" y="25.2" text-anchor="middle" font-size="13" font-weight="700" fill="#7a5a0f">¥</text>'
+      );
+    },
+    bank: function () {
+      return iconWrap(
+        '<path d="M20 4L3 13.5h34z" fill="#d6c39a" ' + ICON_STROKE + '/>' +
+        '<rect x="6" y="14" width="28" height="3" fill="#b49a6a" stroke="#071014" stroke-width="1.4"/>' +
+        '<rect x="8.5" y="18" width="4" height="12" fill="#d9c69c" stroke="#071014" stroke-width="1.4"/>' +
+        '<rect x="17.5" y="18" width="5" height="12" fill="#d9c69c" stroke="#071014" stroke-width="1.4"/>' +
+        '<rect x="27.5" y="18" width="4" height="12" fill="#d9c69c" stroke="#071014" stroke-width="1.4"/>' +
+        '<rect x="5" y="30" width="30" height="5" rx=".8" fill="#b49a6a" stroke="#071014" stroke-width="1.4"/>'
+      );
+    },
+    land: function () {
+      return iconWrap(
+        '<rect x="4" y="21" width="32" height="13" rx="2" fill="#6f9146" ' + ICON_STROKE + '/>' +
+        '<path d="M5 26h30M5 31h30" stroke="#4d6b2f" stroke-width="1.5"/>' +
+        '<path d="M20 24v-8" stroke="#4d6b2f" stroke-width="2.2" stroke-linecap="round"/>' +
+        '<path d="M20 18c-4 0-6.5-2-6.5-5.5 4.5 0 6.5 2.2 6.5 5.5z" fill="#9ac96a" stroke="#071014" stroke-width="1.4"/>' +
+        '<path d="M20 18c4 0 6.5-2 6.5-5.5-4.5 0-6.5 2.2-6.5 5.5z" fill="#7fb54f" stroke="#071014" stroke-width="1.4"/>'
+      );
+    },
+    generic: function () {
+      return iconWrap(
+        '<rect x="6" y="11" width="28" height="23" rx="2.5" fill="#9b8159" ' + ICON_STROKE + '/>' +
+        '<path d="M6 19h28M6 27h28M14 11v23M26 11v23" stroke="#6b5638" stroke-width="1.5"/>' +
+        '<text x="20" y="27.5" text-anchor="middle" font-size="14" font-weight="700" fill="#f5e9cf">?</text>'
+      );
+    }
+  };
+
+  function iconKind(id) {
+    return Object.prototype.hasOwnProperty.call(ICONS, id) ? id : "generic";
+  }
+  function goodIcon(id, extraClass) {
+    var body = ICONS[iconKind(id)]();
+    if (extraClass) {
+      body = body.replace('class="good-icon"', 'class="good-icon ' + extraClass + '"');
+    }
+    return body;
+  }
+  function iconChip(id, label, extraClass) {
+    return '<span class="icon-label ' + (extraClass || "") + '">' + goodIcon(id, "sm") +
+      '<span class="icon-label-text">' + escapeHtml(label) + "</span></span>";
   }
 
   function currentRun() { return RUNS[state.regime] || null; }
@@ -634,6 +851,7 @@
     if (refs.nextMonth) refs.nextMonth.addEventListener("click", function () { selectMonth(state.month + 1); });
     updateTimelineScale();
     document.addEventListener("keydown", function (event) {
+      if (factoryState.open) return;
       if (!state.booted || state.pending) return;
       var tag = event.target && event.target.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -680,7 +898,7 @@
       }
     }
     if (refs.kpiContext) refs.kpiContext.textContent = "第 " + state.month + " 月 / 共 " + MONTHS + " 月 · " + regime.label;
-    document.title = "EcoSim V0.5 · " + regime.label + " · T" + state.month;
+    document.title = "EcoSim V0.6 · " + regime.label + " · T" + state.month;
     updateRegimeTabStates();
   }
 
@@ -689,7 +907,9 @@
   /* ------------------------------------------------------------------ */
   function kpiCard(options) {
     return '<article class="kpi" style="--kpi-color:' + options.color + '">' +
-      '<div class="kpi-head"><span class="kpi-label">' + escapeHtml(options.label) + '</span>' +
+      '<div class="kpi-head"><span class="kpi-label">' +
+      (options.icon ? goodIcon(options.icon, "kpi-icon") : "") +
+      '<span class="kpi-label-text">' + escapeHtml(options.label) + '</span></span>' +
       '<span class="kpi-tag">' + escapeHtml(options.tag) + '</span></div>' +
       '<div class="kpi-main"><span class="kpi-value" title="' + escapeHtml(options.exact || options.value) + '">' +
       escapeHtml(options.value) + '</span><span class="kpi-unit">' + escapeHtml(options.unit) + '</span></div>' +
@@ -744,63 +964,63 @@
 
     refs.kpiGrid.innerHTML = [
       kpiCard({
-        label: "存活 / 失业", tag: "人口", color: "var(--series-3)",
+        label: "存活 / 失业", tag: "人口", color: "var(--series-3)", icon: "person",
         value: fmtInt(alive), exact: fmtInt(alive) + " 人", unit: "人",
         sub: "失业 <b>" + fmtInt(unemployed) + "</b> 人 · 失业率 <b>" + fmtPct(unemploymentRate, 1) + "</b>",
         delta: previous == null ? "起始月" : deltaText(alive, scalarAt("alive", previous), "count"),
         spark: "alive"
       }),
       kpiCard({
-        label: "GDP / 投资", tag: "宏观", color: "var(--series-1)",
+        label: "GDP / 投资", tag: "宏观", color: "var(--series-1)", icon: "machinery",
         value: fmtInt(gdp), exact: fmtInt(gdp) + " 元 / 月", unit: "元",
         sub: "投资 <b>" + fmtCompact(investment) + "</b> · 消费 <b>" + fmtCompact(consumption) + "</b>",
         delta: previous == null ? "起始月" : deltaText(gdp, scalarAt("gdp", previous), "pct"),
         spark: "gdp"
       }),
       kpiCard({
-        label: "资本主义利润率", tag: "利润", color: "var(--series-4)",
+        label: "资本主义利润率", tag: "利润", color: "var(--series-4)", icon: "steel",
         value: fmtPct(profitRate, 2), exact: fmtPct(profitRate, 4), unit: "",
         sub: "月度经济利润 <b>" + fmtSigned(profit, "money") + "</b> 元",
         delta: previous == null ? "起始月" : deltaText(profitRate, scalarAt("profit_rate", previous), "pp"),
         spark: "profit_rate"
       }),
       kpiCard({
-        label: "政府债务 / 赤字", tag: "财政", color: "var(--series-1)",
+        label: "政府债务 / 赤字", tag: "财政", color: "var(--series-1)", icon: "building",
         value: fmtInt(debt), exact: fmtInt(debt) + " 元", unit: "元",
         sub: "本月赤字 <b>" + fmtSigned(deficit, "money") + "</b> 元",
         delta: previous == null ? "起始月" : deltaText(debt, scalarAt("government_debt", previous), "pct"),
         spark: "government_debt"
       }),
       kpiCard({
-        label: "央行货币", tag: "货币", color: "var(--series-2)",
+        label: "央行货币", tag: "货币", color: "var(--series-2)", icon: "coin",
         value: fmtInt(centralBank), exact: fmtInt(centralBank) + " 元", unit: "元",
         sub: "货币总量 <b>" + fmtCompact(moneyTotal) + "</b> 元 · " + escapeHtml(regime.money_regime === "credit" ? "信用货币" : "金本位"),
         delta: previous == null ? "起始月" : deltaText(centralBank, scalarAt("central_bank_money", previous), "pct"),
         spark: "central_bank_money"
       }),
       kpiCard({
-        label: "就业保障人数", tag: "就业", color: "var(--series-3)",
+        label: "就业保障人数", tag: "就业", color: "var(--series-3)", icon: "person",
         value: fmtInt(jgWorkers), exact: fmtInt(jgWorkers) + " 人", unit: "人",
         sub: (regime.job_guarantee ? "占存活工人 <b>" + fmtPct(jgShare, 1) + "</b> · 保障工资 <b>" + fmtNum(regime.jg_wage, 0) + "</b> 元" : "该制度未启用就业保障"),
         delta: previous == null ? "起始月" : deltaText(jgWorkers, scalarAt("government_jg_workers", previous), "count"),
         spark: "government_jg_workers"
       }),
       kpiCard({
-        label: "粮食储备", tag: "储备", color: "var(--series-3)",
+        label: "粮食储备", tag: "储备", color: "var(--series-3)", icon: "food",
         value: fmtNum(foodReserve, 1), exact: fmtNum(foodReserve, 2) + " 吨", unit: "吨",
         sub: "覆盖市场需求 <b>" + escapeHtml(reserveMonthsText) + "</b> · 储备现金 <b>" + fmtCompact(foodReserveCash) + "</b> 元",
         delta: previous == null ? "起始月" : deltaText(foodReserve, scalarAt("food_reserve", previous), "pct"),
         spark: "food_reserve"
       }),
       kpiCard({
-        label: "银行现金 / 资产负债", tag: "银行", color: "var(--series-7)",
+        label: "银行现金 / 资产负债", tag: "银行", color: "var(--series-7)", icon: "bank",
         value: fmtInt(bankCash), exact: fmtInt(bankCash) + " 元", unit: "元",
         sub: "存款 <b>" + fmtCompact(deposits) + "</b> · 贷款 <b>" + fmtCompact(loans) + "</b><br>坏账 <b>" + fmtCompact(writeOffs) + "</b> · 权益 <b>" + fmtCompact(equity) + "</b>",
         delta: previous == null ? "起始月" : deltaText(bankCash, scalarAt("bank_cash", previous), "pct"),
         spark: "bank_cash"
       }),
       kpiCard({
-        label: "人口结构", tag: "人口", color: "var(--series-3)",
+        label: "人口结构", tag: "人口", color: "var(--series-3)", icon: "person",
         value: fmtInt(population), exact: fmtInt(population) + " 人", unit: "人",
         sub: "儿童 <b>" + fmtInt(children) + "</b> · 劳动 <b>" + fmtInt(workingAge) +
           "</b> · 退休 <b>" + fmtInt(retirees) + "</b><br>平均年龄 <b>" + fmtNum(averageAge, 1) + "</b> 岁",
@@ -808,7 +1028,7 @@
         spark: "population"
       }),
       kpiCard({
-        label: "出生 / 死亡", tag: "人口流", color: "var(--series-1)",
+        label: "出生 / 死亡", tag: "人口流", color: "var(--series-1)", icon: "person",
         value: fmtInt(births), exact: fmtInt(births) + " 人 / 月", unit: "人",
         sub: "死亡 <b>" + fmtInt(deaths) + "</b> 人 · 出生率 <b>" + fmtPct(birthRate, 2) +
           "</b><br>死亡率 <b>" + fmtPct(deathRate, 2) + "</b>",
@@ -816,7 +1036,7 @@
         spark: "births"
       }),
       kpiCard({
-        label: "总抚养比", tag: "代际", color: "var(--series-2)",
+        label: "总抚养比", tag: "代际", color: "var(--series-2)", icon: "person",
         value: fmtPct(dependencyRatio, 1), exact: fmtPct(dependencyRatio, 2), unit: "",
         sub: "老年抚养比 <b>" + fmtPct(oldAgeDependency, 1) +
           "</b> · 儿童 + 退休 / 劳动年龄",
@@ -824,7 +1044,7 @@
         spark: "dependency_ratio"
       }),
       kpiCard({
-        label: "养老金基金", tag: "养老金", color: "var(--series-4)",
+        label: "养老金基金", tag: "养老金", color: "var(--series-4)", icon: "coin",
         value: fmtInt(pensionFund), exact: fmtInt(pensionFund) + " 元", unit: "元",
         sub: "本月收入 <b>" + fmtCompact(pensionRevenue) + "</b> · 支出 <b>" +
           fmtCompact(pensionSpending) + "</b><br>领取者 <b>" + fmtInt(pensionRecipients) + "</b> 人",
@@ -1322,10 +1542,13 @@
       var previous = index > 0 ? goodAt("prices", good.id, index - 1) : null;
       var change = previous == null ? "起始月" : deltaText(price, previous, "pct");
       var alert = band.alert ? ' · <span class="mini-alert">' + band.text + '</span>' : "";
-      return '<article class="mini-card">' +
-        '<div class="mini-head"><span class="mini-title" title="' + escapeHtml(good.label) + '">' + escapeHtml(good.label) + '</span>' +
+      return '<article class="mini-card mini-card-action" data-factory-good="' + escapeHtml(good.id) +
+        '" tabindex="0" role="button" aria-label="打开' + escapeHtml(good.label) + '工厂面板">' +
+        '<div class="mini-head"><span class="mini-title" title="' + escapeHtml(good.label) + '">' +
+        goodIcon(good.id, "mini-icon") +
+        '<span class="mini-title-text">' + escapeHtml(good.label) + '</span></span>' +
         '<span class="mini-value">' + fmtNum(price, 2) + '</span></div>' +
-        '<div class="mini-sub" title="价格带下轨 ' + escapeHtml(fmtNum(floor, 2)) + ' · 上轨 ' + escapeHtml(fmtNum(ceiling, 2)) + '">' +
+        '<div class="mini-sub" title="价格带下轨 ' + escapeHtml(fmtNum(floor, 2)) + ' · 上轨 ' + escapeHtml(fmtNum(ceiling, 2)) + ' · 点击标题打开工厂">' +
         fmtNum(floor, 2) + '–' + fmtNum(ceiling, 2) + ' · ' + escapeHtml(change) + alert + '</div>' +
         '<div class="chart-host mini-chart" data-chart="mini" data-kind="price" data-key="' + escapeHtml(good.id) + '"></div>' +
         '</article>';
@@ -1339,13 +1562,587 @@
       var industries = INDUSTRIES.filter(function (industry) { return industry.output === good.id; });
       var title = (industries.length ? industries.map(function (industry) { return industry.label; }).join("/") + " · " : "") + good.label;
       var status = streak >= 1 ? '<span class="mini-alert">零产出 ' + fmtInt(streak) + ' 月</span>' : "正常";
-      return '<article class="mini-card">' +
-        '<div class="mini-head"><span class="mini-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
+      var sector = SECTOR_BY_OUTPUT[good.id];
+      var hint = sector ? "点击标题查看 " + sector.label + " 工厂" : "点击标题查看商品面板";
+      return '<article class="mini-card mini-card-action" data-factory-good="' + escapeHtml(good.id) +
+        '" tabindex="0" role="button" aria-label="打开' + escapeHtml(good.label) + '工厂面板">' +
+        '<div class="mini-head"><span class="mini-title" title="' + escapeHtml(title) + '">' +
+        goodIcon(good.id, "mini-icon") +
+        '<span class="mini-title-text">' + escapeHtml(title) + '</span></span>' +
         '<span class="mini-value">' + fmtNum(output, 2) + '</span></div>' +
-        '<div class="mini-sub" title="连续零产出 ' + fmtInt(streak) + ' 月">' + status + '</div>' +
+        '<div class="mini-sub" title="连续零产出 ' + fmtInt(streak) + ' 月 · ' + escapeHtml(hint) + '">' +
+        status + ' · ' + escapeHtml(hint) + '</div>' +
         '<div class="chart-host mini-chart" data-chart="mini" data-kind="production" data-key="' + escapeHtml(good.id) + '"></div>' +
         '</article>';
     }).join("");
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 机制说明面板                                                        */
+  /* ------------------------------------------------------------------ */
+  function currentIndex() { return clamp(state.month - 1, 0, MONTHS - 1); }
+  function sectorTiers(sector) {
+    return sector && Array.isArray(sector.equipment_tiers) ? sector.equipment_tiers : [];
+  }
+  function maxOf(values) {
+    var max = 0;
+    (values || []).forEach(function (value) { if (num(value, 0) > max) max = num(value, 0); });
+    return max;
+  }
+  function scaleBarsHtml(sector, compact) {
+    var tiers = sectorTiers(sector);
+    if (!tiers.length) return '<div class="scale-empty">该行业没有 2^N 设备阶梯</div>';
+    var isFarm = !!sector.uses_land;
+    var key = isFarm ? "power" : "capacity";
+    var max = Math.max(maxOf(tiers.map(function (tier) { return tier[key]; })), 1e-9);
+    var rows = tiers.map(function (tier) {
+      var value = num(tier[key], 0);
+      var width = value > 0 ? Math.max(2.5, value / max * 100) : 0;
+      var valueText = isFarm ? fmtNum(value, 0) + "× 动力" : fmtNum(value, 2) + " / 月";
+      return '<div class="scale-row" title="' + escapeHtml(tier.label || "") + '：' + escapeHtml(valueText) + '">' +
+        '<span class="scale-level">' + escapeHtml(tier.label || ("t" + tier.tier)) + '</span>' +
+        '<span class="scale-track"><span class="scale-fill" style="width:' + width.toFixed(2) + '%"></span></span>' +
+        '<span class="scale-value">' + escapeHtml(valueText) + '</span></div>';
+    }).join("");
+    return '<div class="scale-bars' + (compact ? " compact" : "") + '">' + rows + '</div>';
+  }
+
+  function rebuildScaleSectorOptions() {
+    if (!refs.scaleSector) return;
+    if (!rebuildScaleSectorOptions.built) {
+      refs.scaleSector.addEventListener("change", function () {
+        SCALE_SECTOR_ID = refs.scaleSector.value || null;
+        renderScalePanel(currentIndex());
+      });
+      rebuildScaleSectorOptions.built = true;
+    }
+    if (!SECTORS.length) {
+      refs.scaleSector.innerHTML = '<option value="">暂无行业元数据</option>';
+      refs.scaleSector.disabled = true;
+      return;
+    }
+    refs.scaleSector.disabled = false;
+    refs.scaleSector.innerHTML = SECTORS.map(function (sector) {
+      return '<option value="' + escapeHtml(sector.id) + '">' + escapeHtml(sector.label) + '</option>';
+    }).join("");
+    if (!SCALE_SECTOR_ID || !SECTOR_BY_ID[SCALE_SECTOR_ID]) rebuildSectorIndex();
+    refs.scaleSector.value = SCALE_SECTOR_ID || SECTORS[0].id;
+  }
+
+  function renderRecipeChain() {
+    if (!refs.recipeChain) return;
+    if (!SECTORS.length) {
+      refs.recipeChain.innerHTML = '<div class="empty-state"><span class="dot" aria-hidden="true"></span>' +
+        '服务端未提供行业配方元数据；请确认使用 V0.6 的 serve_dashboard.py。</div>';
+      return;
+    }
+    refs.recipeChain.innerHTML = SECTORS.map(function (sector) {
+      var inputs = Array.isArray(sector.inputs) ? sector.inputs : [];
+      var chips = [];
+      if (sector.uses_land) {
+        chips.push(iconChip("land", "土地", "recipe-chip"));
+        chips.push(iconChip("person", "劳动", "recipe-chip"));
+      } else if (!inputs.length) {
+        chips.push(iconChip("person", "劳动", "recipe-chip"));
+      }
+      inputs.forEach(function (input) {
+        chips.push(iconChip(input.good, input.label + " " + fmtNum(input.per_unit, 3) + (input.unit || ""), "recipe-chip"));
+      });
+      if (sector.fertilizer) {
+        chips.push(iconChip("fertilizer", sector.fertilizer.label + "（可选，×" +
+          fmtNum(sector.fertilizer.yield_multiplier, 1) + "）", "recipe-chip recipe-optional"));
+      }
+      var tierCount = sectorTiers(sector).length;
+      return '<button type="button" class="recipe-row" data-factory-industry="' + escapeHtml(sector.id) +
+        '" aria-label="打开' + escapeHtml(sector.label) + '工厂面板">' +
+        '<span class="recipe-industry"><strong>' + escapeHtml(sector.label) + '</strong>' +
+        '<small>' + escapeHtml(sector.id) + '</small></span>' +
+        '<span class="recipe-flow">' + chips.join('<span class="recipe-plus">+</span>') +
+        '<span class="recipe-arrow" aria-hidden="true">→</span>' +
+        iconChip(sector.output, sector.output_label, "recipe-chip recipe-output") + '</span>' +
+        '<span class="recipe-meta">' + (tierCount ? tierCount + " 级设备" : "无 2^N 阶梯") + '</span>' +
+        '</button>';
+    }).join("");
+  }
+
+  function renderScalePanel(index) {
+    var sector = SCALE_SECTOR_ID ? SECTOR_BY_ID[SCALE_SECTOR_ID] : null;
+    if (!sector) {
+      if (refs.scaleChart) refs.scaleChart.innerHTML = '<div class="chart-empty">暂无设备数据</div>';
+      if (refs.scaleFacts) refs.scaleFacts.innerHTML = "";
+      if (refs.scaleNote) refs.scaleNote.textContent = "服务端未提供行业设备元数据。";
+      return;
+    }
+    if (refs.scaleChart) {
+      refs.scaleChart.innerHTML = scaleBarsHtml(sector, false);
+      refs.scaleChart.setAttribute("aria-label", sector.label + " 设备等级产能阶梯");
+    }
+    var tiers = sectorTiers(sector);
+    var isFarm = !!sector.uses_land;
+    var last = tiers.length ? tiers[tiers.length - 1] : null;
+    var capacity = industryAt("capacity", sector.id, index);
+    var output = sector.output ? goodAt("production", sector.output, index) : 0;
+    var multiplier = MECHANISM ? num(MECHANISM.capacity_multiplier, 2) : 2;
+    var facts = [
+      ["设备等级", tiers.length ? tiers.length + " 级" : "—"],
+      ["每级倍率", "×" + fmtNum(multiplier, 0)],
+      ["最高等级", last ? last.label : "—"],
+      ["最大企业数", sector.max_firms == null ? "—" : fmtInt(sector.max_firms)],
+      ["当月产量", fmtNum(output, 2) + " " + (sector.output_unit || "单位")],
+      ["名义产能", fmtNum(capacity, 2)]
+    ];
+    if (refs.scaleFacts) refs.scaleFacts.innerHTML = factRows(facts);
+    if (refs.scaleNote) {
+      if (isFarm) {
+        var landMeta = MECHANISM && MECHANISM.land;
+        refs.scaleNote.textContent = landMeta
+          ? "农机功率每级翻倍：每个劳动力可管理 " + fmtNum(landMeta.land_per_worker_base, 0) +
+            "×(1+功率) 亩。它控制的是土地规模，不改变亩产；亩产由熟练度和化肥决定。"
+          : "农机功率每级翻倍，控制更多土地，不直接提高亩产。";
+      } else if (sector.id === "service") {
+        refs.scaleNote.textContent = "服务业只有手工服务摊（t0，1×），没有 2^N 资本升级；失业者可自雇进入。";
+      } else if (tiers.length) {
+        var first = tiers[0];
+        refs.scaleNote.textContent = "t0 → t" + (tiers.length - 1) +
+          "：产能 " + fmtNum(first.capacity, 2) + " → " + fmtNum(last.capacity, 2) +
+          "，满产用工 " + fmtInt(first.workers) + " → " + fmtInt(last.workers) +
+          "，资本品造价每级翻倍。实际产量还受劳动利用率、熟练度和投入品约束。";
+      } else {
+        refs.scaleNote.textContent = "服务端未提供该行业的设备阶梯。";
+      }
+    }
+  }
+
+  function renderLandPanel(index) {
+    var landMeta = MECHANISM && MECHANISM.land;
+    var total = landMeta ? num(landMeta.total_land_mu, 0) : 0;
+    var smallholder = scalarAt("smallholder_land", index);
+    var estate = scalarAt("estate_land", index);
+    var capitalist = total > 0 ? Math.max(0, total - smallholder) : 0;
+    var activeCapitalist = Math.max(0, capitalist - estate);
+    if (refs.landBar) {
+      if (total > 0) {
+        var smallPct = clamp(smallholder / total * 100, 0, 100);
+        var activePct = clamp(activeCapitalist / total * 100, 0, 100);
+        var estatePct = clamp(estate / total * 100, 0, 100);
+        refs.landBar.innerHTML =
+          '<div class="land-track" role="img" aria-label="土地分配：自耕农 ' + fmtNum(smallholder, 0) +
+          ' 亩，资本主义农场 ' + fmtNum(activeCapitalist, 0) + ' 亩，待售遗产地 ' + fmtNum(estate, 0) + ' 亩">' +
+          '<span class="land-seg land-smallholder" style="width:' + smallPct.toFixed(2) + '%"></span>' +
+          '<span class="land-seg land-capitalist" style="width:' + activePct.toFixed(2) + '%"></span>' +
+          '<span class="land-seg land-estate" style="width:' + estatePct.toFixed(2) + '%"></span></div>' +
+          '<div class="land-legend"><span><i class="land-key smallholder"></i>自耕农</span>' +
+          '<span><i class="land-key capitalist"></i>资本主义农场</span>' +
+          '<span><i class="land-key estate"></i>待售遗产地</span></div>';
+      } else {
+        refs.landBar.innerHTML = '<div class="chart-empty">暂无土地元数据</div>';
+      }
+    }
+    if (refs.landFacts) {
+      refs.landFacts.innerHTML = factRows([
+        ["自耕农土地", fmtNum(smallholder, 0) + " 亩"],
+        ["资本主义农场", fmtNum(activeCapitalist, 0) + " 亩"],
+        ["待售遗产地", fmtNum(estate, 0) + " 亩"],
+        ["地价", fmtNum(scalarAt("land_price", index), 1) + " 元/亩"],
+        ["农机", fmtInt(scalarAt("farm_machinery", index)) + " 台"],
+        ["资本主义 / 家庭农场", fmtInt(scalarAt("capitalist_farms", index)) + " / " +
+          fmtInt(scalarAt("household_farms", index))],
+        ["化肥用量", fmtNum(scalarAt("fertilizer_used", index), 2) + " 吨/月"],
+        ["农业劳动生产率", fmtNum(scalarAt("ag_productivity", index), 2) + " 吨/人/月"]
+      ]);
+    }
+    if (refs.landNote) {
+      refs.landNote.textContent = landMeta
+        ? "总土地 " + fmtNum(landMeta.total_land_mu, 0) + " 亩，地价由中央土地市场试探；" +
+          "自耕农在价格达到保留价后整块出售，资本主义农场竞价买入。农机只扩大可管理土地；" +
+          "化肥每亩 " + fmtNum(landMeta.fertilizer_per_mu, 2) + " 吨，使亩产 ×" +
+          fmtNum(landMeta.fertilizer_yield_multiplier, 1) + "。"
+        : "土地数据来自引擎月度统计；机制元数据缺失时仅显示数值。";
+    }
+  }
+
+  function renderConsumptionPanel(index) {
+    var consumption = MECHANISM && MECHANISM.consumption;
+    var hunger = MECHANISM && MECHANISM.hunger;
+    if (refs.consumptionFacts) {
+      refs.consumptionFacts.innerHTML = consumption ? factRows([
+        ["粮食 / 工人 / 月", fmtNum(consumption.food_per_worker, 2) + " 吨"],
+        ["衣物 / 工人 / 月", fmtNum(consumption.cloth_per_worker, 2) + " 件"],
+        ["住房 / 工人 / 月", fmtNum(consumption.housing_per_worker, 2) + " 平方米"],
+        ["服务 / 户 / 月", fmtNum(consumption.service_per_household, 2) + " 单位"],
+        ["粮食救济缓冲", fmtNum(MECHANISM.food_relief_buffer_months, 1) + " 个月"],
+        ["本月救济 / 征购", fmtCompact(scalarAt("food_relief", index)) + " / " +
+          fmtCompact(scalarAt("food_levy", index)) + " 吨"]
+      ]) : "";
+    }
+    if (refs.hungerChart) {
+      if (!hunger) {
+        refs.hungerChart.innerHTML = '<div class="chart-empty">暂无饥饿机制元数据</div>';
+      } else {
+        var after = num(hunger.death_after_months, 3);
+        var base = num(hunger.base_chance, 0.08);
+        var step = num(hunger.step_chance, 0.08);
+        var cap = Math.max(num(hunger.cap_chance, 0.5), 1e-9);
+        var columns = [];
+        for (var month = 1; month <= 12; month++) {
+          var chance = month < after ? 0 : Math.min(cap, base + step * (month - after));
+          var height = chance > 0 ? Math.max(2, chance / cap * 100) : 0;
+          var label = month === 1 || month === after || month === 6 || month === 9 || month === 12
+            ? String(month) : "";
+          columns.push(
+            '<span class="hunger-col" title="连续不足第 ' + month + ' 个月：' +
+            (chance > 0 ? fmtPct(chance, 0) : "0%") + '">' +
+            '<span class="hunger-bar" style="height:' + height.toFixed(2) + '%"></span>' +
+            '<small>' + label + '</small></span>'
+          );
+        }
+        refs.hungerChart.innerHTML = '<div class="hunger-plot">' + columns.join("") + '</div>' +
+          '<div class="hunger-caption">连续摄入不足月数 → 每月饥饿死亡概率（上限 ' + fmtPct(cap, 0) + '）</div>';
+        refs.hungerChart.setAttribute("aria-label",
+          "饥饿死亡概率：连续不足 " + after + " 个月后从 " + fmtPct(base, 0) +
+          " 起步，每月增加 " + fmtPct(step, 0) + "，上限 " + fmtPct(cap, 0));
+      }
+    }
+    if (refs.hungerNote) {
+      refs.hungerNote.textContent = hunger
+        ? "家庭先满足温饱篮子；连续摄入不足 " + fmtNum(hunger.death_after_months, 0) +
+          " 个月后开始掷骰，概率每月递增，上限 " + fmtPct(hunger.cap_chance, 0) +
+          "。粮食救济只释放缓冲（" + fmtNum(MECHANISM.food_relief_buffer_months, 1) +
+          " 个月）以外的储备。"
+        : "温饱篮子与饥饿机制来自引擎配置。";
+    }
+  }
+
+  function renderPensionMech(index) {
+    var config = regimeMeta();
+    var stages = [
+      { id: "person", label: "儿童", value: scalarAt("children", index) },
+      { id: "person", label: "劳动年龄", value: scalarAt("working_age", index) },
+      { id: "person", label: "退休", value: scalarAt("retirees", index) }
+    ];
+    if (refs.lifeStage) {
+      refs.lifeStage.innerHTML = stages.map(function (stage) {
+        return '<span class="life-stage-item">' + goodIcon(stage.id, "life-icon") +
+          '<strong>' + fmtInt(stage.value) + '</strong><small>' + escapeHtml(stage.label) + '</small></span>';
+      }).join('<span class="life-arrow" aria-hidden="true">→</span>');
+    }
+    if (refs.pensionFactsMech) {
+      refs.pensionFactsMech.innerHTML = factRows([
+        ["劳动 / 退休年龄", fmtNum(config.working_age_years, 0) + " / " +
+          (num(config.retirement_age_years, 0) > 0 ? fmtNum(config.retirement_age_years, 0) + " 岁" : "不退休")],
+        ["生育概率", fmtPct(config.fertility_monthly, 2) + " / 月"],
+        ["参考预期寿命", fmtNum(config.life_expectancy_years, 0) + " 岁"],
+        ["养老金缴费率", fmtPct(config.pension_tax_rate, 1)],
+        ["养老金替代率", fmtPct(config.pension_replacement, 0)],
+        ["本月领取者", fmtInt(scalarAt("pension_recipients", index)) + " 人"],
+        ["基金余额", fmtCompact(scalarAt("pension_fund", index)) + " 元"],
+        ["本月收支", fmtCompact(scalarAt("pension_revenue", index)) + " / " +
+          fmtCompact(scalarAt("pension_spending", index)) + " 元"]
+      ]);
+    }
+  }
+
+  function renderMechanism(index) {
+    renderRecipeChain();
+    renderScalePanel(index);
+    renderLandPanel(index);
+    renderConsumptionPanel(index);
+    renderPensionMech(index);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 工厂面板（点击价格 / 产量卡片、行业行）                            */
+  /* ------------------------------------------------------------------ */
+  function sectorForGood(goodId) {
+    if (!goodId) return null;
+    if (SECTOR_BY_OUTPUT[goodId]) return SECTOR_BY_OUTPUT[goodId];
+    var industry = INDUSTRIES.filter(function (item) { return item.output === goodId; })[0];
+    return industry ? SECTOR_BY_ID[industry.id] || null : null;
+  }
+
+  function resolveFactoryTarget(target) {
+    var sector = null;
+    if (target.industryId) sector = SECTOR_BY_ID[target.industryId] || null;
+    if (!sector && target.goodId) sector = sectorForGood(target.goodId);
+    var industryId = sector ? sector.id : target.industryId;
+    if (!industryId && target.goodId) {
+      var match = INDUSTRIES.filter(function (item) { return item.output === target.goodId; })[0];
+      if (match) industryId = match.id;
+    }
+    var goodId = sector ? sector.output : target.goodId;
+    return { sector: sector, industryId: industryId, goodId: goodId };
+  }
+
+  function capitalSourceText(sector) {
+    var sources = Array.isArray(sector.capital_goods) ? sector.capital_goods : [];
+    if (!sources.length) return "该行业不需要资本品：设备为手工/自雇形态。";
+    return "资本品来源：" + sources.map(function (source) {
+      return source.label + (source.industry_label ? "（" + source.industry_label + "行业）" : "");
+    }).join("、") + "。设备由本行业企业发起投资项目，支付资本品并经过建造期后形成。";
+  }
+
+  function tierTableHtml(sector) {
+    var tiers = sectorTiers(sector);
+    if (!tiers.length) {
+      return '<p class="mechanism-note">该行业没有 2^N 设备阶梯（或服务端未提供设备表）。</p>';
+    }
+    var isFarm = !!sector.uses_land;
+    var head = isFarm
+      ? '<th>等级</th><th>功率</th><th>资本品 / 数量</th><th>建造</th>'
+      : '<th>等级</th><th>产能</th><th>用工</th><th>资本品 / 数量</th><th>建造</th>';
+    var rows = tiers.map(function (tier) {
+      var capital = tier.capital_good
+        ? escapeHtml(tier.capital_good_label || tier.capital_good) + " × " + fmtNum(tier.capital_cost, 2)
+        : "手工 / 无";
+      var build = fmtInt(tier.build_months) + " 月";
+      if (isFarm) {
+        return '<tr><td>' + escapeHtml(tier.label) + '</td><td>' + fmtNum(tier.power, 0) +
+          '×</td><td>' + capital + '</td><td>' + build + '</td></tr>';
+      }
+      return '<tr><td>' + escapeHtml(tier.label) + '</td><td>' + fmtNum(tier.capacity, 2) +
+        '</td><td>' + fmtInt(tier.workers) + '</td><td>' + capital + '</td><td>' + build + '</td></tr>';
+    }).join("");
+    return '<div class="table-wrap factory-tier-table"><table class="tier-table">' +
+      '<thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function factoryStat(label, value, unit) {
+    return '<div class="factory-stat"><span>' + escapeHtml(label) + '</span><strong>' +
+      escapeHtml(value) + '</strong>' + (unit ? '<small>' + escapeHtml(unit) + '</small>' : "") + '</div>';
+  }
+
+  function buildFactoryContent(target, index) {
+    var sector = target.sector;
+    var industryId = target.industryId;
+    var goodId = target.goodId;
+    var industry = industryId ? INDUSTRY_BY_ID[industryId] : null;
+    var good = goodId ? GOOD_BY_ID[goodId] : null;
+    var industryLabelText = (industry && industry.label) || (sector && sector.label) || industryId || "商品面板";
+    var goodLabelText = (good && good.label) || (sector && sector.output_label) || goodId || "未知商品";
+    var unit = (good && good.unit) || (sector && sector.output_unit) || "单位";
+    var output = goodId ? goodAt("production", goodId, index) : null;
+    var capacity = industryId ? industryAt("capacity", industryId, index) : null;
+    var firms = industryId ? industryAt("firms", industryId, index) : null;
+    var workers = industryId ? industryAt("workers_by_industry", industryId, index) : null;
+    var projects = industryId ? industryAt("active_projects", industryId, index) : null;
+    var equipmentUnits = industryId ? industryAt("equipment_units", industryId, index) : null;
+    var utilization = capacity > 0 && output != null ? output / capacity : null;
+
+    var stats = [];
+    if (goodId) stats.push(factoryStat("当月产量", fmtNum(output, 2), unit));
+    if (capacity != null) stats.push(factoryStat("名义产能", fmtNum(capacity, 2), unit));
+    if (utilization != null) stats.push(factoryStat("产量 / 名义产能", fmtPct(utilization, 1), ""));
+    if (firms != null) stats.push(factoryStat("企业数", fmtInt(firms), "家"));
+    if (workers != null) stats.push(factoryStat("工人数", fmtInt(workers), "人"));
+    if (equipmentUnits != null) stats.push(factoryStat("设备台数", fmtInt(equipmentUnits), "台"));
+    if (projects != null) stats.push(factoryStat("活跃项目", fmtInt(projects), "个"));
+    if (goodId) {
+      stats.push(factoryStat("价格", fmtNum(goodAt("prices", goodId, index), 2), "元"));
+      stats.push(factoryStat("库存", fmtNum(goodAt("inventory", goodId, index), 2), unit));
+    }
+
+    var recipeChips = [];
+    var inputs = sector && Array.isArray(sector.inputs) ? sector.inputs : [];
+    if (sector && sector.uses_land) {
+      recipeChips.push(iconChip("land", "土地", "factory-chip"));
+      recipeChips.push(iconChip("person", "劳动", "factory-chip"));
+    } else if (sector && !inputs.length) {
+      recipeChips.push(iconChip("person", "劳动", "factory-chip"));
+    }
+    inputs.forEach(function (input) {
+      recipeChips.push(iconChip(input.good, input.label + " " + fmtNum(input.per_unit, 3) +
+        (input.unit || "") + "/单位产出", "factory-chip"));
+    });
+    if (!recipeChips.length && !sector) {
+      recipeChips.push('<span class="factory-chip factory-chip-muted">配方元数据缺失</span>');
+    }
+
+    var recipeHtml = '<div class="factory-recipe">' +
+      '<div class="factory-recipe-inputs">' + recipeChips.join('<span class="recipe-plus">+</span>') + '</div>' +
+      '<span class="recipe-arrow" aria-hidden="true">→</span>' +
+      iconChip(sector ? sector.output : goodId, goodLabelText, "factory-chip factory-output") +
+      '</div>';
+    if (sector && sector.fertilizer) {
+      recipeHtml += '<p class="mechanism-note">化肥：每亩 ' +
+        fmtNum(sector.fertilizer.per_mu, 2) + " 吨，启用后亩产 ×" +
+        fmtNum(sector.fertilizer.yield_multiplier, 1) + "。化肥不是按产出比例投入，而是按土地面积投入。</p>";
+    }
+
+    var productionHtml = sector
+      ? '<p class="factory-source">' + escapeHtml(capitalSourceText(sector)) + '</p>' +
+        '<p class="factory-source">劳动来自失业者与其他行业招聘；' +
+        (sector.uses_land
+          ? "农业用工由土地面积和农机功率共同决定，产出 = 土地 × 亩产 × 熟练度 × 化肥倍率。"
+          : sector.id === "service"
+            ? "服务业产出 = 手工服务摊数量 × 劳动利用率 × 熟练度；没有资本品和 2^N 设备。"
+            : "工业产出 = 设备产能 × min(计划, 有效劳动/所需劳动) × 平均熟练度，并受投入品库存约束。") +
+        '</p>' + tierTableHtml(sector)
+      : '<p class="mechanism-note">该商品没有对应的本地行业配方；以下仅为价格与产量统计。' +
+        (industryId ? "行业 " + escapeHtml(industryId) + " 来自 stats，但服务端没有它的 SECTOR_PARAMS。" : "") + '</p>';
+
+    var scaleBody;
+    if (!sector) {
+      scaleBody = '<p class="mechanism-note">未知商品使用通用图标；不会因为新增商品而崩溃。</p>';
+    } else if (sector.id === "service") {
+      scaleBody = '<p class="factory-explain">服务业只有手工服务摊 t0（1×），没有 2^N 资本升级；' +
+        '失业者可自雇进入，连续无销售会退出。最大企业数 ' +
+        (sector.max_firms == null ? "—" : fmtInt(sector.max_firms)) + '。</p>';
+    } else if (sector.uses_land) {
+      scaleBody = '<p class="factory-explain">农机 t0–t7 的功率为 1×、2×、4×…128×：每级翻倍，' +
+        '使每个劳动力可管理的土地成倍增加，但<b>不改变亩产</b>。亩产由土地、熟练度和化肥决定。' +
+        '资本主义农场通过土地市场扩大面积，再购买更高功率农机。</p>' +
+        '<div class="factory-tier-bars">' + scaleBarsHtml(sector, true) + '</div>';
+    } else {
+      var tiers = sectorTiers(sector);
+      scaleBody = '<p class="factory-explain">设备等级 t0–t7 对应 1×、2×、4×…128×：每级产能翻倍、' +
+        '满产用工 +1、资本品数量翻倍（t0 可为手工设备）。企业优先选择可负担的最小规模，' +
+        '再按需求升级；行业企业数上限为 ' + (sector.max_firms == null ? "—" : fmtInt(sector.max_firms)) + '。</p>' +
+        (tiers.length ? '<div class="factory-tier-bars">' + scaleBarsHtml(sector, true) + '</div>' : '');
+    }
+
+    return '<div class="factory-head">' +
+      '<div class="factory-icon">' + goodIcon(goodId || (sector && sector.output), "xl") + '</div>' +
+      '<div class="factory-title-wrap"><span class="kicker">FACTORY / INDUSTRY PANEL</span>' +
+      '<h2 id="factory-title">' + escapeHtml(industryLabelText) + '</h2>' +
+      '<p class="factory-sub">产出 ' + goodIcon(goodId || (sector && sector.output), "inline-icon") +
+      '<strong>' + escapeHtml(goodLabelText) + '</strong>' +
+      (industryId ? ' · <code>' + escapeHtml(industryId) + '</code>' : '') +
+      (sector && sector.is_resource ? ' · 资源型行业' : '') + '</p></div></div>' +
+      '<div class="factory-stats">' + stats.join("") + '</div>' +
+      (utilization != null && utilization > 1.0001
+        ? '<p class="factory-stat-note">名义产能按熟练度 1 汇总；实际产量乘熟练度' +
+          (sector && sector.uses_land ? "与化肥倍率" : "") + '后可超过 100%。</p>'
+        : "") +
+      '<div class="factory-columns">' +
+      '<section class="factory-section"><h3>投入 → 产出</h3>' + recipeHtml + '</section>' +
+      '<section class="factory-section"><h3>生产资料与来源</h3>' + productionHtml + '</section>' +
+      '<section class="factory-section factory-wide"><h3>规模机制（2^N）</h3>' + scaleBody +
+      '<p class="mechanism-note">产量来自 <code>stats.production</code>；名义产能来自逐企业设备容量汇总（熟练度 1）；' +
+      '活跃项目来自 <code>active_projects</code>。当前月 T' + state.month + '。</p></section>' +
+      '</div>';
+  }
+
+  function renderFactoryPanel() {
+    if (!factoryState.open || !factoryState.target || !refs.factoryBody) return;
+    refs.factoryBody.innerHTML = buildFactoryContent(factoryState.target, currentIndex());
+  }
+
+  function openFactoryPanel(target, trigger) {
+    if (!state.booted || !refs.factoryOverlay) return;
+    hideTooltip();
+    factoryState.open = true;
+    factoryState.trigger = trigger || document.activeElement;
+    factoryState.target = resolveFactoryTarget(target);
+    renderFactoryPanel();
+    refs.factoryOverlay.hidden = false;
+    document.body.classList.add("factory-open");
+    window.setTimeout(function () {
+      if (refs.factoryClose) refs.factoryClose.focus();
+    }, 0);
+  }
+
+  function closeFactoryPanel() {
+    if (!factoryState.open) return;
+    factoryState.open = false;
+    factoryState.target = null;
+    if (refs.factoryOverlay) refs.factoryOverlay.hidden = true;
+    document.body.classList.remove("factory-open");
+    var trigger = factoryState.trigger;
+    factoryState.trigger = null;
+    if (trigger && typeof trigger.focus === "function") {
+      try { trigger.focus({ preventScroll: true }); } catch (_) { trigger.focus(); }
+    }
+  }
+
+  function scrollToQueryTarget() {
+    if (!SCROLL_PARAM) return;
+    var target = document.getElementById(SCROLL_PARAM);
+    if (!target) return;
+    var root = document.documentElement;
+    var previous = root.style.scrollBehavior;
+    root.style.scrollBehavior = "auto";
+    target.scrollIntoView({ block: "start" });
+    root.style.scrollBehavior = previous;
+  }
+
+  function openFactoryFromQuery() {
+    if (!FACTORY_PARAM || factoryState.queryOpened) return;
+    factoryState.queryOpened = true;
+    var value = FACTORY_PARAM;
+    var prefix = "";
+    var colon = value.indexOf(":");
+    if (colon >= 0) {
+      prefix = value.slice(0, colon);
+      value = value.slice(colon + 1);
+    }
+    if (prefix === "good" || (!prefix && !SECTOR_BY_ID[value] && SECTOR_BY_OUTPUT[value])) {
+      openFactoryPanel({ goodId: value }, null);
+    } else if (prefix === "industry" || SECTOR_BY_ID[value] || INDUSTRY_BY_ID[value]) {
+      openFactoryPanel({ industryId: value }, null);
+    } else {
+      openFactoryPanel({ goodId: value }, null);
+    }
+  }
+
+  function initFactoryPanel() {
+    if (refs.factoryClose) refs.factoryClose.addEventListener("click", closeFactoryPanel);
+    if (refs.factoryOverlay) {
+      refs.factoryOverlay.addEventListener("click", function (event) {
+        if (event.target === refs.factoryOverlay) closeFactoryPanel();
+      });
+    }
+    document.addEventListener("click", function (event) {
+      if (factoryState.open) return;
+      var industryTrigger = event.target.closest && event.target.closest("[data-factory-industry]");
+      if (industryTrigger) {
+        event.preventDefault();
+        openFactoryPanel({ industryId: industryTrigger.getAttribute("data-factory-industry") }, industryTrigger);
+        return;
+      }
+      var goodTrigger = event.target.closest && event.target.closest("[data-factory-good]");
+      if (!goodTrigger) return;
+      if (event.target.closest(".chart-host")) return;
+      event.preventDefault();
+      openFactoryPanel({ goodId: goodTrigger.getAttribute("data-factory-good") }, goodTrigger);
+    });
+    document.addEventListener("keydown", function (event) {
+      if (factoryState.open) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeFactoryPanel();
+          return;
+        }
+        if (event.key === "Tab" && refs.factoryModal) {
+          var focusables = refs.factoryModal.querySelectorAll(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          if (focusables.length) {
+            var first = focusables[0];
+            var last = focusables[focusables.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          }
+        }
+        return;
+      }
+      if (event.key !== "Enter" && event.key !== " ") return;
+      var trigger = event.target.closest && event.target.closest(
+        "[data-factory-industry], [data-factory-good]"
+      );
+      if (!trigger || trigger.tagName === "BUTTON") return;
+      if (event.target.closest(".chart-host")) return;
+      event.preventDefault();
+      if (trigger.hasAttribute("data-factory-industry")) {
+        openFactoryPanel({ industryId: trigger.getAttribute("data-factory-industry") }, trigger);
+      } else {
+        openFactoryPanel({ goodId: trigger.getAttribute("data-factory-good") }, trigger);
+      }
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -1369,8 +2166,9 @@
         '<span class="badge ' + (streak >= 3 ? "bad" : "warn") + '">零产出 ' + fmtInt(streak) + ' 月</span>' :
         '<span class="badge ok">正常</span>';
       var bandBadge = band.alert ? ' <span class="badge ' + (band.text === "触底" ? "bad" : "warn") + '">' + band.text + '</span>' : "";
-      return '<tr>' +
-        '<td class="name-cell">' + escapeHtml(good.label) + '<small>' + escapeHtml(good.id) + '</small></td>' +
+      return '<tr class="clickable-row" data-factory-good="' + escapeHtml(good.id) + '" tabindex="0" title="点击查看工厂面板">' +
+        '<td class="name-cell"><span class="name-with-icon">' + goodIcon(good.id, "row-icon") +
+        '<span class="name-text">' + escapeHtml(good.label) + '<small>' + escapeHtml(good.id) + '</small></span></span></td>' +
         '<td>' + fmtNum(goodAt("production", good.id, index), 2) + '</td>' +
         '<td>' + fmtNum(goodAt("demand", good.id, index), 2) + '</td>' +
         '<td>' + fmtNum(goodAt("supply", good.id, index), 2) + '</td>' +
@@ -1433,8 +2231,13 @@
       totalFirms += firms; totalWorkers += workers; totalProjects += projects;
       var output = industry.output && GOOD_BY_ID[industry.output] ? goodLabel(industry.output) : "—";
       var production = industry.output ? fmtNum(goodAt("production", industry.output, index), 2) : "—";
-      return '<tr><td class="name-cell">' + escapeHtml(industry.label) + '<small>' + escapeHtml(industry.id) + '</small></td>' +
-        '<td>' + escapeHtml(output) + '</td><td>' + fmtInt(firms) + '</td><td>' + fmtInt(workers) + '</td>' +
+      var productCell = industry.output
+        ? iconChip(industry.output, output)
+        : escapeHtml(output);
+      return '<tr class="clickable-row" data-factory-industry="' + escapeHtml(industry.id) +
+        '" tabindex="0" title="点击查看工厂面板"><td class="name-cell">' + escapeHtml(industry.label) +
+        '<small>' + escapeHtml(industry.id) + '</small></td>' +
+        '<td class="product-cell">' + productCell + '</td><td>' + fmtInt(firms) + '</td><td>' + fmtInt(workers) + '</td>' +
         '<td>' + fmtInt(projects) + '</td><td class="num-strong">' + production + '</td></tr>';
     }).join("");
     return '<div class="table-wrap"><table>' +
@@ -1506,7 +2309,9 @@
       var value = inventory * price;
       totalValue += value;
       var coverage = demand > 1e-9 ? fmtMonths(inventory / demand) : "无需求";
-      return '<tr><td class="name-cell">' + escapeHtml(good.label) + '<small>' + escapeHtml(good.id) + '</small></td>' +
+      return '<tr class="clickable-row" data-factory-good="' + escapeHtml(good.id) + '" tabindex="0" title="点击查看工厂面板">' +
+        '<td class="name-cell"><span class="name-with-icon">' + goodIcon(good.id, "row-icon") +
+        '<span class="name-text">' + escapeHtml(good.label) + '<small>' + escapeHtml(good.id) + '</small></span></span></td>' +
         '<td>' + fmtNum(inventory, 2) + '</td><td>' + fmtNum(demand, 2) + '</td>' +
         '<td>' + coverage + '</td><td>' + fmtInt(value) + '</td></tr>';
     }).join("");
@@ -1524,8 +2329,10 @@
       var ceiling = goodAt("price_ceilings", good.id, index);
       var band = bandState(price, floor, ceiling);
       var badge = band.alert ? ' <span class="badge ' + (band.text === "触底" ? "bad" : "warn") + '">' + band.text + '</span>' : "";
-      return '<div class="band-row">' +
-        '<span class="band-name" title="' + escapeHtml(good.id) + '">' + escapeHtml(good.label) + '</span>' +
+      return '<div class="band-row clickable-row" data-factory-good="' + escapeHtml(good.id) +
+        '" tabindex="0" title="点击查看工厂面板">' +
+        '<span class="band-name" title="' + escapeHtml(good.id) + '">' + goodIcon(good.id, "row-icon") +
+        '<span>' + escapeHtml(good.label) + '</span></span>' +
         '<div class="band-meter" title="下轨 ' + escapeHtml(fmtNum(floor, 2)) + ' · 现价 ' + escapeHtml(fmtNum(price, 2)) + ' · 上轨 ' + escapeHtml(fmtNum(ceiling, 2)) + '">' +
         '<span class="band-dot" style="left:' + (band.position * 100).toFixed(2) + '%"></span></div>' +
         '<span class="band-nums"><span class="floor">' + fmtNum(floor, 2) + '</span> · <strong>' +
@@ -1769,8 +2576,10 @@
     renderPriceGrid(index);
     renderProductionGrid(index);
     renderDemography(index);
+    renderMechanism(index);
     renderDiagnostics(index);
     mountCharts();
+    if (factoryState.open) renderFactoryPanel();
   }
 
   function initComparisonDelegates() {
@@ -1806,6 +2615,7 @@
     buildControls();
     updateControls();
     initComparisonDelegates();
+    initFactoryPanel();
     renderRuntimeBadges();
     boot();
   } catch (error) {

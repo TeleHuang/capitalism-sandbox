@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地 V0.5 经济驾驶舱服务（Python 标准库，无 FastAPI 依赖）。
+"""本地 V0.6 经济驾驶舱服务（Python 标准库，无 FastAPI 依赖）。
 
 启动：
   PYTHONPATH=src python scripts/serve_dashboard.py --port 8765
@@ -8,6 +8,7 @@
 接口：
   GET /api/run?regime=classical|keynesian|mmt&months=240&seed=1
   GET /api/compare?months=240&seed=1
+  GET /api/meta
   GET /api/health
 
 前端：web/v04/index.html + app.js + styles.css，通过 fetch 调用上述接口。
@@ -33,9 +34,28 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "web" / "v04"
 sys.path.insert(0, str(ROOT / "src"))
 
-from ecosim.config import SECTOR_PARAMS  # noqa: E402
+from ecosim.config import (  # noqa: E402
+    BASE_GRAIN_YIELD,
+    CLOTH_PER_WORKER,
+    EQUIPMENT,
+    FERTILIZER_PER_MU,
+    FERTILIZER_YIELD_MULTIPLIER,
+    FOOD_PER_WORKER,
+    FOOD_RELIEF_BUFFER_MONTHS,
+    HOUSING_PER_WORKER,
+    HUNGER_DEATH_AFTER_MONTHS,
+    HUNGER_DEATH_BASE,
+    HUNGER_DEATH_CAP,
+    HUNGER_DEATH_STEP,
+    INITIAL_LAND_PRICE,
+    LAND_PER_WORKER_BASE,
+    SECTOR_PARAMS,
+    SERVICE_PER_HOUSEHOLD,
+    TOTAL_LAND_MU,
+)
 from ecosim.engine import Engine  # noqa: E402
 from ecosim.enums import GOOD_LABELS, Good, Industry  # noqa: E402
+from ecosim.production import capacity_at_skill_one  # noqa: E402
 from ecosim.scenarios import (  # noqa: E402
     CLASSICAL_LAISSEZ_FAIRE,
     KEYNESIAN_WELFARE,
@@ -45,7 +65,7 @@ from ecosim.scenarios import (  # noqa: E402
     build_scenario_1,
 )
 
-DASHBOARD_VERSION = "0.5.0"
+DASHBOARD_VERSION = "0.6.0"
 DEFAULT_MONTHS = 240
 DEFAULT_SEED = 1
 MAX_MONTHS = 1200
@@ -74,6 +94,20 @@ INDUSTRY_LABELS = {
     "construction": "建筑",
     "fertilizer_factory": "化肥",
     "service": "服务",
+}
+
+# 商品计量单位；UI 用真实单位展示，而不是只写“单位”。
+GOOD_UNITS = {
+    "food": "吨",
+    "coal": "吨",
+    "iron_ore": "吨",
+    "steel": "吨",
+    "brick": "块",
+    "cloth": "件",
+    "fertilizer": "吨",
+    "machinery": "台",
+    "building": "平方米",
+    "service": "单位",
 }
 
 SCALAR_FIELDS = (
@@ -142,7 +176,20 @@ SCALAR_FIELDS = (
     "pension_fund",
     "pension_recipients",
     "food_relief",
+    "food_relief_unmet",
     "food_levy",
+    "hunger_deaths",
+    # --- V0.6 土地 / 农业规模 ---
+    "estate_land",
+    "smallholder_land",
+    "land_price",
+    "capitalist_farms",
+    "household_farms",
+    "farm_machinery",
+    "fertilizer_used",
+    "ag_productivity",
+    "food_output",
+    "asset_pool_equipment_units",
 )
 
 # 人口金字塔年龄桶；与 engine._record_stats 的 age_histogram keys 一致。
@@ -168,6 +215,10 @@ INDUSTRY_FIELDS = (
     "firms",
     "workers_by_industry",
     "active_projects",
+    # 由 _supplement 逐月汇总：熟练度 1 时的行业产能（农业 = 土地 × 亩产）
+    # 与在产设备台数。
+    "capacity",
+    "equipment_units",
 )
 
 COMPARE_METRICS = (
@@ -211,6 +262,11 @@ INTEGER_FIELDS = {
     "births",
     "deaths",
     "pension_recipients",
+    "capitalist_farms",
+    "household_farms",
+    "farm_machinery",
+    "asset_pool_equipment_units",
+    "hunger_deaths",
 }
 
 
@@ -282,11 +338,30 @@ def _industry_label(key: str) -> str:
     return INDUSTRY_LABELS.get(key, key.replace("_", " "))
 
 
-def _supplement(engine: Engine) -> dict[str, float]:
-    """stats 之外、但诊断表需要的银行/政府账户字段。"""
+def _supplement(engine: Engine) -> dict[str, Any]:
+    """stats 之外、但诊断表 / 工厂面板需要的字段。
+
+    ``capacity_by_industry`` 是熟练度 1 时的名义产能：农业按“土地 × 亩产”
+    计算，工业按设备容量汇总，服务业按手工服务摊数量汇总。它与实际产量
+    （受劳动利用率、熟练度、投入约束影响）分开显示，便于诊断“有产能但缺人/
+    缺料”的情况。
+    """
     loans = sum(engine.bank.loans.values())
     deposits = sum(engine.bank.deposits.values())
     government = engine.government
+    capacity_by_industry: dict[str, float] = {}
+    equipment_units_by_industry: dict[str, int] = {}
+    for enterprise in engine.enterprises.values():
+        if not enterprise.active:
+            continue
+        industry_key = enterprise.industry.value
+        capacity_by_industry[industry_key] = capacity_by_industry.get(
+            industry_key, 0.0
+        ) + capacity_at_skill_one(enterprise)
+        equipment_units_by_industry[industry_key] = (
+            equipment_units_by_industry.get(industry_key, 0)
+            + enterprise.total_equipment()
+        )
     return {
         "bank_equity": engine.bank.cash + loans - deposits,
         "government_interest_paid": (
@@ -298,6 +373,8 @@ def _supplement(engine: Engine) -> dict[str, float]:
         "government_public_capital": (
             government.public_capital if government is not None else 0.0
         ),
+        "capacity_by_industry": capacity_by_industry,
+        "equipment_units_by_industry": equipment_units_by_industry,
     }
 
 
@@ -327,6 +404,13 @@ def _regime_metadata(
         "jg_max_workers": config.jg_max_workers,
         "government_cash": config.government_cash,
         "money_initial": round(money_initial, 4) if money_initial is not None else None,
+        # --- V0.5/V0.6 人口与养老金（机制说明面板使用真实剧本参数） ---
+        "working_age_years": config.working_age_years,
+        "retirement_age_years": config.retirement_age_years,
+        "fertility_monthly": config.fertility_monthly,
+        "life_expectancy_years": config.life_expectancy_years,
+        "pension_tax_rate": config.pension_tax_rate,
+        "pension_replacement": config.pension_replacement,
     }
 
 
@@ -342,12 +426,198 @@ def _all_regime_metadata(current_id: str, money_initial: float) -> list[dict[str
     ]
 
 
+def _good_unit(key: str) -> str:
+    return GOOD_UNITS.get(key, "单位")
+
+
+def _equipment_tier(key: str) -> int:
+    """把 farm_t3 / service_t0 解析成 3 / 0；未知后缀按 0 处理。"""
+    suffix = key.rsplit("_t", 1)[-1]
+    return int(suffix) if suffix.isdigit() else 0
+
+
+def _sector_metadata() -> list[dict[str, Any]]:
+    """返回工厂面板 / 机制说明所需的真实行业配方与设备阶梯。
+
+    数据全部来自 ``SECTOR_PARAMS`` + ``EQUIPMENT``，不写死面板数字。
+    """
+    output_industry: dict[str, Industry] = {
+        params.output.value: industry for industry, params in SECTOR_PARAMS.items()
+    }
+    sectors: list[dict[str, Any]] = []
+    for industry, params in SECTOR_PARAMS.items():
+        output = params.output.value
+        inputs = [
+            {
+                "good": good.value,
+                "label": _good_label(good.value),
+                "per_unit": ratio,
+                "unit": _good_unit(good.value),
+            }
+            for good, ratio in params.inputs.items()
+        ]
+        tiers: list[dict[str, Any]] = []
+        capital_goods: list[dict[str, Any]] = []
+        seen_capital: set[str] = set()
+        for key in params.equipment:
+            et = EQUIPMENT.get(key)
+            if et is None:
+                continue
+            tier = _equipment_tier(key)
+            capital_good = et.capital_good.value if et.capital_good else None
+            capital_industry = (
+                output_industry.get(capital_good) if capital_good else None
+            )
+            item = {
+                "key": key,
+                "label": et.label,
+                "tier": tier,
+                "multiplier": 2**tier,
+                "capacity": round(et.capacity, 4),
+                "workers": et.workers,
+                "power": round(et.power, 4),
+                "capital_good": capital_good,
+                "capital_good_label": (
+                    _good_label(capital_good) if capital_good else None
+                ),
+                "capital_industry": (
+                    capital_industry.value if capital_industry else None
+                ),
+                "capital_industry_label": (
+                    _industry_label(capital_industry.value)
+                    if capital_industry
+                    else None
+                ),
+                "capital_cost": et.capital_cost,
+                "build_months": et.build_months,
+            }
+            tiers.append(item)
+            if capital_good and capital_good not in seen_capital:
+                seen_capital.add(capital_good)
+                capital_goods.append(
+                    {
+                        "good": capital_good,
+                        "label": _good_label(capital_good),
+                        "industry": (
+                            capital_industry.value if capital_industry else None
+                        ),
+                        "industry_label": (
+                            _industry_label(capital_industry.value)
+                            if capital_industry
+                            else None
+                        ),
+                    }
+                )
+        uses_land = industry == Industry.AGRICULTURE
+        sectors.append(
+            {
+                "id": industry.value,
+                "label": _industry_label(industry.value),
+                "output": output,
+                "output_label": _good_label(output),
+                "output_unit": _good_unit(output),
+                "inputs": inputs,
+                "uses_land": uses_land,
+                "fertilizer": (
+                    {
+                        "good": "fertilizer",
+                        "label": _good_label("fertilizer"),
+                        "per_mu": FERTILIZER_PER_MU,
+                        "yield_multiplier": FERTILIZER_YIELD_MULTIPLIER,
+                    }
+                    if uses_land
+                    else None
+                ),
+                "equipment_tiers": tiers,
+                "capital_goods": capital_goods,
+                "max_firms": params.max_firms,
+                "is_resource": bool(params.is_resource),
+            }
+        )
+    return sectors
+
+
+def _fallback_sector(industry_id: str, output: str | None) -> dict[str, Any]:
+    """新分支新增但本服务端没有 SECTOR_PARAMS 时，仍给面板一个安全结构。"""
+    label = _industry_label(industry_id)
+    output_id = output or industry_id
+    return {
+        "id": industry_id,
+        "label": label,
+        "output": output,
+        "output_label": _good_label(output_id),
+        "output_unit": _good_unit(output_id),
+        "inputs": [],
+        "uses_land": False,
+        "fertilizer": None,
+        "equipment_tiers": [],
+        "capital_goods": [],
+        "max_firms": None,
+        "is_resource": False,
+        "unknown": True,
+    }
+
+
+def _mechanism_metadata() -> dict[str, Any]:
+    """机制说明面板所需的全局真实参数（来自 config.py）。"""
+    return {
+        "equipment_tiers": 8,
+        "capacity_multiplier": 2,
+        "land": {
+            "total_land_mu": TOTAL_LAND_MU,
+            "initial_price": INITIAL_LAND_PRICE,
+            "base_grain_yield": BASE_GRAIN_YIELD,
+            "fertilizer_per_mu": FERTILIZER_PER_MU,
+            "fertilizer_yield_multiplier": FERTILIZER_YIELD_MULTIPLIER,
+            "land_per_worker_base": LAND_PER_WORKER_BASE,
+        },
+        "hunger": {
+            "death_after_months": HUNGER_DEATH_AFTER_MONTHS,
+            "base_chance": HUNGER_DEATH_BASE,
+            "step_chance": HUNGER_DEATH_STEP,
+            "cap_chance": HUNGER_DEATH_CAP,
+        },
+        "consumption": {
+            "food_per_worker": FOOD_PER_WORKER,
+            "cloth_per_worker": CLOTH_PER_WORKER,
+            "housing_per_worker": HOUSING_PER_WORKER,
+            "service_per_household": SERVICE_PER_HOUSEHOLD,
+        },
+        "food_relief_buffer_months": FOOD_RELIEF_BUFFER_MONTHS,
+    }
+
+
+def _static_meta() -> dict[str, Any]:
+    """不运行引擎也能拿到的静态元数据（供 `/api/meta` 使用）。"""
+    return {
+        "version": DASHBOARD_VERSION,
+        "goods": [
+            {
+                "id": good.value,
+                "label": _good_label(good.value),
+                "unit": _good_unit(good.value),
+            }
+            for good in Good
+        ],
+        "industries": [
+            {
+                "id": industry.value,
+                "label": _industry_label(industry.value),
+                "output": _industry_output(industry.value),
+            }
+            for industry in Industry
+        ],
+        "sectors": _sector_metadata(),
+        "mechanism": _mechanism_metadata(),
+    }
+
+
 def _extract_payload(
     regime_id: str,
     months: int,
     seed: int,
     stats: list[dict],
-    supplements: list[dict[str, float]],
+    supplements: list[dict[str, Any]],
     money_initial: float,
     elapsed_seconds: float,
 ) -> dict[str, Any]:
@@ -361,7 +631,7 @@ def _extract_payload(
     good_series: dict[str, dict[str, list[float | int]]] = {
         field: {good: [] for good in goods} for field in GOOD_FIELDS
     }
-    industry_series: dict[str, dict[str, list[int]]] = {
+    industry_series: dict[str, dict[str, list[float | int]]] = {
         field: {industry: [] for industry in industries}
         for field in INDUSTRY_FIELDS
     }
@@ -383,7 +653,12 @@ def _extract_payload(
                 raw = mapping.get(good, 0.0) if isinstance(mapping, dict) else 0.0
                 good_series[field][good].append(_rounded(raw, field))
         for field in INDUSTRY_FIELDS:
-            mapping = stat.get(field) or {}
+            if field == "capacity":
+                mapping = supplement.get("capacity_by_industry") or {}
+            elif field == "equipment_units":
+                mapping = supplement.get("equipment_units_by_industry") or {}
+            else:
+                mapping = stat.get(field) or {}
             for industry in industries:
                 raw = mapping.get(industry, 0.0) if isinstance(mapping, dict) else 0.0
                 industry_series[field][industry].append(_rounded(raw, field))
@@ -401,7 +676,14 @@ def _extract_payload(
         warnings_by_month.append(deduped)
 
     label, config = REGIME_BY_ID[regime_id]
-    good_meta = [{"id": good, "label": _good_label(good)} for good in goods]
+    good_meta = [
+        {
+            "id": good,
+            "label": _good_label(good),
+            "unit": _good_unit(good),
+        }
+        for good in goods
+    ]
     industry_meta = []
     for industry in industries:
         output = _industry_output(industry)
@@ -412,13 +694,25 @@ def _extract_payload(
                 "id": industry,
                 "label": _industry_label(industry),
                 "output": output,
+                "output_label": _good_label(output) if output else None,
+                "output_unit": _good_unit(output) if output else None,
             }
         )
+
+    sector_meta = _sector_metadata()
+    known_sectors = {sector["id"] for sector in sector_meta}
+    for industry_meta_item in industry_meta:
+        if industry_meta_item["id"] not in known_sectors:
+            sector_meta.append(
+                _fallback_sector(
+                    industry_meta_item["id"], industry_meta_item["output"]
+                )
+            )
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return {
         "meta": {
-            "title": "EcoSim V0.5 经济驾驶舱",
+            "title": "EcoSim V0.6 经济驾驶舱",
             "version": DASHBOARD_VERSION,
             "months": months,
             "seed": seed,
@@ -426,6 +720,8 @@ def _extract_payload(
             "engine": "Engine + build_scenario_1",
             "goods": good_meta,
             "industries": industry_meta,
+            "sectors": sector_meta,
+            "mechanism": _mechanism_metadata(),
             "regimes": _all_regime_metadata(regime_id, money_initial),
             "active_regime": regime_id,
             "config": _regime_metadata(regime_id, label, config, money_initial),
@@ -457,7 +753,7 @@ def _execute_run(regime_id: str, months: int, seed: int) -> dict[str, Any]:
     engine = Engine(seed=seed)
     build_scenario_1(engine, config=config)
     money_initial = float(engine.money_initial)
-    supplements: list[dict[str, float]] = []
+    supplements: list[dict[str, Any]] = []
     for _ in range(months):
         engine.step()
         supplements.append(_supplement(engine))
@@ -655,7 +951,7 @@ def _common_params(query: dict[str, list[str]]) -> tuple[int, int]:
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
-    server_version = "EcoSimDashboard/0.4"
+    server_version = "EcoSimDashboard/0.6"
     sys_version = ""
 
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -720,7 +1016,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
         parsed = urlparse(self.path)
-        if parsed.path in ("/api/run", "/api/compare", "/api/health"):
+        if parsed.path in ("/api/run", "/api/compare", "/api/meta", "/api/health"):
             self._handle_api(parsed)
             return
         self._serve_static(parsed.path)
@@ -752,6 +1048,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 months, seed = _common_params(query)
                 self._send_json(SERVICE.get_compare(months, seed))
                 return
+            if parsed.path == "/api/meta":
+                self._send_json({"meta": _static_meta()})
+                return
             raise ApiError(HTTPStatus.NOT_FOUND, "未知接口")
         except ApiError as exc:
             self._send_json(
@@ -779,7 +1078,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 def main(argv: list[str] | None = None) -> int:
     global SERVICE
     parser = argparse.ArgumentParser(
-        description="V0.5 本地经济驾驶舱服务（标准库 http.server）"
+        description="V0.6 本地经济驾驶舱服务（标准库 http.server）"
     )
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
     parser.add_argument("--port", type=int, default=8765, help="端口（默认 8765）")
@@ -800,7 +1099,7 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     server.daemon_threads = True
     print("=" * 66)
-    print("EcoSim V0.5 经济驾驶舱")
+    print("EcoSim V0.6 经济驾驶舱")
     print(f"前端：http://{args.host}:{args.port}/")
     print(f"接口：http://{args.host}:{args.port}/api/run?regime=classical&months=240&seed=1")
     print(f"对比：http://{args.host}:{args.port}/api/compare?months=240&seed=1")

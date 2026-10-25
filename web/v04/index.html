@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="EcoSim V0.5 本地经济驾驶舱：真实引擎统计、制度切换与逐月诊断。">
-<title>EcoSim V0.5 · 经济驾驶舱</title>
+<meta name="description" content="EcoSim V0.6 本地经济驾驶舱：真实引擎统计、产品图标、工厂面板与机制说明。">
+<title>EcoSim V0.6 · 经济驾驶舱</title>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -27,9 +27,9 @@
 <div class="app">
   <header class="topbar">
     <div class="brand">
-      <div class="eyebrow">ECOSIM / V0.5 / DIAGNOSTIC COCKPIT</div>
+      <div class="eyebrow">ECOSIM / V0.6 / DIAGNOSTIC COCKPIT</div>
       <h1>经济驾驶舱</h1>
-      <p class="lede">真实引擎输出 · 每个数字都来自 <code>engine.stats</code> 的逐月切片</p>
+      <p class="lede">真实引擎输出 · 产品图标、可点击工厂面板与 2^N 设备机制说明</p>
       <div class="meta-strip">
         <span id="source-line">正在连接本地引擎 API…</span>
         <span class="sep" aria-hidden="true">/</span>
@@ -94,7 +94,7 @@
         <div id="kpi-grid" class="kpi-grid"></div>
       </section>
 
-      <section aria-labelledby="demo-title">
+      <section id="demography" aria-labelledby="demo-title">
         <div class="section-heading">
           <div><span class="kicker">DEMOGRAPHY</span><h2 id="demo-title">人口与代际</h2></div>
           <p class="section-note">人口金字塔、出生/死亡、抚养比、养老金 · 来自同一份 stats</p>
@@ -183,17 +183,17 @@
         </article>
       </section>
 
-      <section aria-labelledby="market-title">
+      <section id="market" aria-labelledby="market-title">
         <div class="section-heading">
           <div><span class="kicker">MARKET LAYERS</span><h2 id="market-title">价格与产量</h2></div>
-          <p class="section-note">小多图按 stats keys 动态生成 · 点击任意小图定位月份</p>
+          <p class="section-note">小多图按 stats keys 动态生成 · 点击图表定位月份，点击卡片标题打开工厂面板</p>
         </div>
         <div class="dual-grid">
           <article class="panel">
             <header class="panel-head">
               <div class="panel-title-wrap">
                 <h2>各商品价格</h2>
-                <p class="panel-sub">每格一条价格轨迹，显示当前价格与价格带上下轨</p>
+                <p class="panel-sub">每格一条价格轨迹 · 标题可点击查看工厂</p>
               </div>
               <span class="panel-note">真实参考价</span>
             </header>
@@ -203,11 +203,92 @@
             <header class="panel-head">
               <div class="panel-title-wrap">
                 <h2>各行业产量</h2>
-                <p class="panel-sub">按产出商品展示，行业名从 stats 映射，不写死行业清单</p>
+                <p class="panel-sub">按产出商品展示 · 标题可点击查看工厂</p>
               </div>
               <span class="panel-note">月产量</span>
             </header>
             <div class="panel-body"><div id="production-grid" class="mini-grid"></div></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="mechanism" aria-labelledby="mechanism-title">
+        <div class="section-heading">
+          <div><span class="kicker">MECHANISMS</span><h2 id="mechanism-title">机制说明</h2></div>
+          <p class="section-note">生产配方、2^N 设备、土地/农机、消费/饥饿、人口/养老金 · 点击行业行打开工厂面板</p>
+        </div>
+        <div class="mechanism-grid">
+          <article class="panel mechanism-wide">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>生产配方链</h2>
+                <p class="panel-sub">每行一个行业：投入商品 → 产出商品；数据来自 <code>SECTOR_PARAMS</code>，新商品自动使用通用图标</p>
+              </div>
+              <span class="panel-note">点击任意行<br>查看工厂面板</span>
+            </header>
+            <div class="panel-body"><div id="recipe-chain" class="recipe-chain"></div></div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>2^N 设备阶梯</h2>
+                <p class="panel-sub">8 个设备等级：产能 1× → 128×，每级翻倍</p>
+              </div>
+              <span class="panel-note">真实设备表</span>
+            </header>
+            <div class="panel-body">
+              <label class="mechanism-control" for="scale-sector">行业
+                <select id="scale-sector"></select>
+              </label>
+              <div id="scale-chart" class="scale-chart" role="img"></div>
+              <div id="scale-facts" class="fact-list"></div>
+              <p id="scale-note" class="mechanism-note"></p>
+            </div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>土地与农机</h2>
+                <p class="panel-sub">农机功率控制可管理土地，不直接提高亩产</p>
+              </div>
+              <span class="panel-note">月度真实值</span>
+            </header>
+            <div class="panel-body">
+              <div id="land-bar" class="land-bar"></div>
+              <div id="land-facts" class="fact-list"></div>
+              <p id="land-note" class="mechanism-note"></p>
+            </div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>消费与饥饿</h2>
+                <p class="panel-sub">温饱篮子、饥饿死亡概率与粮食救济缓冲</p>
+              </div>
+              <span class="panel-note">生存机制</span>
+            </header>
+            <div class="panel-body">
+              <div id="consumption-facts" class="fact-list"></div>
+              <div id="hunger-chart" class="hunger-chart" role="img"></div>
+              <p id="hunger-note" class="mechanism-note"></p>
+            </div>
+          </article>
+          <article class="panel">
+            <header class="panel-head">
+              <div class="panel-title-wrap">
+                <h2>人口、退休与养老金</h2>
+                <p class="panel-sub">按当前剧本参数解释代际转移；与上方人口面板同源</p>
+              </div>
+              <span class="panel-note">当前制度</span>
+            </header>
+            <div class="panel-body">
+              <div id="life-stage" class="life-stage"></div>
+              <div id="pension-facts-mech" class="fact-list"></div>
+              <div class="mech-links">
+                <a href="#demography">人口与代际面板</a>
+                <a href="#market">价格与产量</a>
+              </div>
+            </div>
           </article>
         </div>
       </section>
@@ -227,7 +308,7 @@
       <div>
         数据：<span id="footer-engine">Engine + build_scenario_1</span> · 全部数值来自真实引擎运行，未使用示例数字。<br>
         服务：<code>python scripts/serve_dashboard.py --port 8765</code>
-        · 接口：<code>/api/run</code> · <code>/api/compare</code>
+        · 接口：<code>/api/run</code> · <code>/api/compare</code> · <code>/api/meta</code>
       </div>
       <div id="footer-generated">本地 API · 单页前端</div>
     </div>
@@ -235,6 +316,13 @@
 </div>
 
 <div id="chart-tooltip" role="status" aria-live="polite" hidden></div>
+
+<div id="factory-overlay" class="factory-overlay" hidden>
+  <div id="factory-modal" class="factory-modal" role="dialog" aria-modal="true" aria-labelledby="factory-title" tabindex="-1">
+    <button id="factory-close" class="factory-close" type="button" aria-label="关闭工厂面板">关闭</button>
+    <div id="factory-body" class="factory-body"></div>
+  </div>
+</div>
 
 <script>
 /* 尽早安装错误处理器：即使 app.js 加载失败也能显示错误，而不是白屏。 */
