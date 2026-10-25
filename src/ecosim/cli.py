@@ -9,6 +9,7 @@ from .engine import Engine
 from .scenarios import (
     CLASSICAL_LAISSEZ_FAIRE,
     KEYNESIAN_WELFARE,
+    LATE_CAPITALISM,
     MMT_SOVEREIGN,
     ScenarioConfig,
     build_scenario_1,
@@ -18,6 +19,7 @@ REGIMES = {
     "classical": CLASSICAL_LAISSEZ_FAIRE,
     "keynesian": KEYNESIAN_WELFARE,
     "mmt": MMT_SOVEREIGN,
+    "late_capitalism": LATE_CAPITALISM,
 }
 
 
@@ -66,7 +68,10 @@ def main(argv: list[str] | None = None) -> int:
         "--regime",
         choices=sorted(REGIMES),
         default="classical",
-        help="政策制度：classical（自由放任）/ keynesian（福利国家）/ mmt（主权货币+就业保障）",
+        help=(
+            "政策制度：classical（自由放任）/ keynesian（福利国家）/ "
+            "mmt（主权货币+就业保障）/ late_capitalism（低生育+老龄化）"
+        ),
     )
     parser.add_argument(
         "--price-regime",
@@ -83,7 +88,15 @@ def main(argv: list[str] | None = None) -> int:
     final = engine.stats[-1]
     print()
     print("最终状态")
-    print(f"  存活：{final['alive']}  本月死亡：{final['dead_this_month']}")
+    print(
+        f"  人口：{final['population']}（儿童 {final['children']} / "
+        f"劳动年龄 {final['working_age']} / 退休 {final['retirees']}）  "
+        f"本月出生/死亡：{final['births']}/{final['deaths']}"
+    )
+    print(
+        f"  抚养比：{final['dependency_ratio']:.2f}  "
+        f"平均年龄：{final['average_age']:.1f}"
+    )
     print(
         f"  GDP：{final['gdp']:.0f}  消费：{final['consumption']:.0f}  "
         f"投资：{final['investment']:.0f}"
@@ -122,6 +135,12 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"  就业保障人数：{final['government_jg_workers']}  "
             f"央行货币：{final['central_bank_money']:.0f}"
+        )
+        print(
+            f"  养老金：缴费 {final['pension_contributions']:.0f} / "
+            f"发放 {final['pension_spending']:.0f} / "
+            f"基金 {final['pension_fund']:.0f} / "
+            f"补贴 {final['pension_subsidy']:.0f}"
         )
     if final["warnings"]:
         print("  警告：")

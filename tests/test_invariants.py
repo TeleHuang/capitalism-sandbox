@@ -120,11 +120,14 @@ class InvariantRun:
         if engine.government is not None:
             if stat["government_tax_revenue"] > 1e-9:
                 self.saw_tax_revenue = True
+            # V0.5 养老金显式记账：缴费是收入、发放是支出；补贴属于融资。
             identity = (
                 stat["government_spending"]
                 + stat["government_transfers"]
                 + stat["government_interest_paid"]
+                + stat["pension_spending"]
                 - stat["government_tax_revenue"]
+                - stat["pension_contributions"]
             )
             budget_gap = abs(identity - stat["government_deficit"])
             self.max_budget_gap = max(self.max_budget_gap, budget_gap)

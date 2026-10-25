@@ -22,7 +22,9 @@ class ScenarioTests(unittest.TestCase):
 
     def test_survives_the_first_five_years_without_a_famine(self):
         self.assertGreaterEqual(self.final["alive"], 1050)
-        self.assertEqual(self.final["dead_this_month"], 0)
+        # V0.5 引入年龄/婴儿死亡后，任意月份都可能有少量自然死亡；
+        # 验收线改为“月死亡率 < 1%”（无大规模饥荒），而不是恰好 0。
+        self.assertLess(self.final["death_rate"], 0.01)
 
     def test_money_is_conserved(self):
         self.assertAlmostEqual(

@@ -51,6 +51,18 @@ class Government:
     ui_replacement: float = 0.0
     ui_duration: int = 0
 
+    # 养老金（PAYG）。pension_fund 是政府现金中的专项台账：
+    # 缴费进入基金，发放从基金支出；不足部分通过 _government_finance
+    # 发债/央行融资，并记为 pension_subsidy，绝不静默创造货币。
+    pension_tax_rate: float = 0.0
+    pension_replacement: float = 0.0
+    pension_fund: float = 0.0
+    pension_contributions: float = 0.0
+    pension_subsidy: float = 0.0
+    pension_revenue: float = 0.0        # 缴费 + 政府补贴（基金总流入）
+    pension_spending: float = 0.0
+    pension_balance: float = 0.0
+
     # 公共投资
     public_investment_rate: float = 0.0
     public_investment_countercyclical: float = 0.0
@@ -88,3 +100,8 @@ class Government:
         self.interest_paid = 0.0
         self.deficit = 0.0
         self.public_investment_budget = 0.0
+        self.pension_contributions = 0.0
+        self.pension_subsidy = 0.0
+        self.pension_revenue = 0.0
+        self.pension_spending = 0.0
+        self.pension_balance = 0.0

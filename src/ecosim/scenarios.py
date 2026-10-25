@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .config import (
@@ -8,8 +9,9 @@ from .config import (
     SECTOR_PARAMS,
     TOTAL_LAND_MU,
     WAGE_BASE,
+    DemographicsConfig,
 )
-from .enums import Industry
+from .enums import Good, Industry
 from .engine import Engine
 from .government import Government, MoneyRegime, PolicyRegime
 from .models import FoodReserve
@@ -41,11 +43,71 @@ class ScenarioConfig:
     jg_max_workers: int = 0
     government_cash: float = 0.0
 
+    # --- V0.5 人口 / 代际 / 退休金 ---
+    working_age_years: int = 14
+    retirement_age_years: int = 0          # 0 = 不退休
+    fertility_monthly: float = 0.012
+    fertility_multiplier: float = 1.0
+    # 仅用于初始年龄权重/文档；实际死亡由下面的 Gompertz 参数决定。
+    life_expectancy_years: float = 50.0
+    mortality_A: float = 0.0015
+    mortality_B: float = 0.0001
+    mortality_C: float = 0.085
+    infant_mortality_annual: float = 0.18
+    child_mortality_annual: float = 0.02
+    initial_age_min_years: int = 18
+    initial_age_max_years: int = 60
+    initial_female_share: float = 0.5
+    # 初始儿童/退休者数量（默认 0，保持旧测试的 1100 初始劳动力口径）。
+    initial_children: int = 0
+    initial_retirees: int = 0
+    child_food: float = 0.05
+    child_cloth: float = 0.5
+    child_housing: float = 0.1
+    pension_tax_rate: float = 0.0
+    pension_replacement: float = 0.0
+    pension_fund_initial: float = 0.0
+
+    def demographics(self) -> DemographicsConfig:
+        return DemographicsConfig(
+            working_age_months=self.working_age_years * 12,
+            retirement_age_months=self.retirement_age_years * 12,
+            fertility_monthly=self.fertility_monthly,
+            fertility_multiplier=self.fertility_multiplier,
+            mortality_A=self.mortality_A,
+            mortality_B=self.mortality_B,
+            mortality_C=self.mortality_C,
+            infant_mortality_annual=self.infant_mortality_annual,
+            child_mortality_annual=self.child_mortality_annual,
+            initial_age_min_months=self.initial_age_min_years * 12,
+            initial_age_max_months=self.initial_age_max_years * 12,
+            initial_female_share=self.initial_female_share,
+            child_food=self.child_food,
+            child_cloth=self.child_cloth,
+            child_housing=self.child_housing,
+            pension_tax_rate=self.pension_tax_rate,
+            pension_replacement=self.pension_replacement,
+            pension_fund_initial=self.pension_fund_initial,
+        )
+
 
 CLASSICAL_LAISSEZ_FAIRE = ScenarioConfig(
     name="古典自由放任（pre-Keynesian）",
     policy_regime=PolicyRegime.CLASSICAL,
     money_regime=MoneyRegime.GOLD,
+    working_age_years=14,
+    retirement_age_years=0,
+    # 名义 TFR 目标 5–6；食物/收入/parity 乘数会把有效生育率压到
+    # 可持续区间（~1200–1600 人），避免超过 6000 亩地的粮食上限。
+    fertility_monthly=0.012,
+    life_expectancy_years=50.0,
+    mortality_A=0.0015,
+    mortality_B=0.0001,
+    mortality_C=0.085,
+    infant_mortality_annual=0.18,
+    child_mortality_annual=0.02,
+    initial_children=300,
+    initial_retirees=0,
 )
 
 KEYNESIAN_WELFARE = ScenarioConfig(
@@ -60,6 +122,19 @@ KEYNESIAN_WELFARE = ScenarioConfig(
     public_investment_rate=0.15,
     public_investment_countercyclical=0.08,
     government_cash=10_000.0,
+    working_age_years=16,
+    retirement_age_years=65,
+    fertility_monthly=0.0105,
+    life_expectancy_years=80.0,
+    mortality_A=0.0003,
+    mortality_B=0.000045,
+    mortality_C=0.09,
+    infant_mortality_annual=0.005,
+    child_mortality_annual=0.0005,
+    initial_children=200,
+    initial_retirees=50,
+    pension_tax_rate=0.10,
+    pension_replacement=0.45,
 )
 
 # L2 可选预设：古典制度 + 成本加成目标价 + 参考价软走廊。
@@ -87,6 +162,53 @@ MMT_SOVEREIGN = ScenarioConfig(
     jg_wage=30.0,
     jg_max_workers=0,
     government_cash=0.0,
+    working_age_years=16,
+    retirement_age_years=65,
+    fertility_monthly=0.0082,
+    life_expectancy_years=80.0,
+    mortality_A=0.00028,
+    mortality_B=0.000042,
+    mortality_C=0.09,
+    infant_mortality_annual=0.0045,
+    child_mortality_annual=0.0004,
+    initial_children=200,
+    initial_retirees=50,
+    pension_tax_rate=0.12,
+    pension_replacement=0.50,
+)
+
+# 晚期资本主义：低生育、长寿、老龄化、较高养老金缴费/替代率。
+# 仍是金本位 + 福利国家财政，因此货币守恒测试同样适用。
+LATE_CAPITALISM = ScenarioConfig(
+    name="晚期资本主义（低生育/长寿/老龄化）",
+    policy_regime=PolicyRegime.KEYNESIAN,
+    money_regime=MoneyRegime.GOLD,
+    bank_intermediation=True,
+    tax_rate_wage=0.10,
+    tax_rate_profit=0.10,
+    ui_replacement=0.40,
+    ui_duration=18,
+    public_investment_rate=0.12,
+    public_investment_countercyclical=0.06,
+    government_cash=20_000.0,
+    working_age_years=18,
+    retirement_age_years=67,
+    fertility_monthly=0.0055,
+    life_expectancy_years=85.0,
+    mortality_A=0.00018,
+    mortality_B=0.00003,
+    mortality_C=0.095,
+    infant_mortality_annual=0.002,
+    child_mortality_annual=0.0002,
+    initial_age_min_years=20,
+    initial_age_max_years=70,
+    initial_children=150,
+    initial_retirees=100,
+    child_food=0.04,
+    child_cloth=0.4,
+    child_housing=0.08,
+    pension_tax_rate=0.16,
+    pension_replacement=0.55,
 )
 
 
@@ -99,6 +221,46 @@ def build_scenario_1(
     粮食紧平衡、农业初始未机械化。设备目录经过校准，使初始工业产出
     接近 PRD 的叙事总量。
     """
+    engine.demographics = config.demographics()
+    demo = engine.demographics
+
+    def sample_initial_age() -> int:
+        """按近似稳定人口年龄分布抽取初始年龄（不是全 0/全同龄）。
+
+        权重 exp(-age / (0.8 * life_expectancy))：高寿命剧本年龄更老。
+        """
+        min_year = demo.initial_age_min_months // 12
+        max_year = demo.initial_age_max_months // 12
+        years = list(range(min_year, max_year + 1))
+        scale = max(5.0, 0.8 * config.life_expectancy_years)
+        weights = [math.exp(-year / scale) for year in years]
+        year = engine.demographic_rng.choices(years, weights=weights, k=1)[0]
+        return year * 12 + engine.demographic_rng.randint(0, 11)
+
+    def seed_worker(
+        industry: Industry,
+        skill: float,
+        cash: float,
+        food: float,
+    ):
+        """初始劳动力：18–60 岁（剧本可调）、性别约 50/50。"""
+        age = sample_initial_age()
+        sex = (
+            "F"
+            if engine.demographic_rng.random() < demo.initial_female_share
+            else "M"
+        )
+        return engine.create_worker(
+            industry=industry,
+            skill=skill,
+            cash=cash,
+            food=food,
+            age_months=age,
+            sex=sex,
+            is_child=False,
+            birth_tick=-age,
+        )
+
     # --- 资产阶级 -------------------------------------------------
     for i in range(50):
         engine.capitalists[f"C_{i}"] = _capitalist(f"C_{i}", 100_000.0, "director")
@@ -110,7 +272,7 @@ def build_scenario_1(
 
     # --- 自耕农农业 ------------------------------------------------
     for _ in range(600):
-        worker = engine.create_worker(
+        worker = seed_worker(
             industry=Industry.AGRICULTURE,
             skill=2.0,
             cash=20.0,
@@ -158,7 +320,7 @@ def build_scenario_1(
                     enterprise.add_equipment(key)
             worker_count = workers_per_enterprise + (1 if index < extra_workers else 0)
             for _ in range(worker_count):
-                worker = engine.create_worker(
+                worker = seed_worker(
                     industry=industry,
                     skill=2.0,
                     cash=20.0,
@@ -209,9 +371,103 @@ def build_scenario_1(
             job_guarantee=config.job_guarantee,
             jg_wage=config.jg_wage,
             jg_max_workers=config.jg_max_workers,
+            pension_tax_rate=config.pension_tax_rate,
+            pension_replacement=config.pension_replacement,
         )
+        # 初始养老金基金只是政府现金中的专项台账，不能凭空增加货币。
+        engine.government.pension_fund = min(
+            config.pension_fund_initial, engine.government.cash
+        )
+    _seed_dependents(engine, config)
     engine.money_initial = engine.total_money()
     return engine
+
+
+def _seed_dependents(engine: Engine, config: ScenarioConfig) -> None:
+    """创建初始儿童/退休者（默认 0，保持旧基线）。
+
+    儿童随机挂到一名成年女性名下，出生现金为 0；退休者不进入劳动市场，
+    养老金从第一个月的政府结算开始领取。二者都不改变初始货币总量。
+    """
+    demo = engine.demographics
+    adults = [
+        worker
+        for worker in engine.workers.values()
+        if worker.alive and not worker.is_child and not worker.retired
+    ]
+    women = [worker for worker in adults if worker.sex == "F"]
+
+    for index in range(max(0, config.initial_children)):
+        age = engine.demographic_rng.randint(
+            0, max(0, demo.working_age_months - 1)
+        )
+        sex = "F" if engine.demographic_rng.random() < 0.5 else "M"
+        mother = women[index % len(women)] if women else None
+        child = engine.create_worker(
+            industry=mother.industry if mother else Industry.SERVICE,
+            skill=0.0,
+            cash=0.0,
+            food=0.0,
+            age_months=age,
+            sex=sex,
+            is_child=True,
+            parent_id=mother.id if mother else None,
+            birth_tick=-age,
+        )
+        child.cloth = 0.0
+        child.housing = 0.0
+        child.living_standard = "child"
+        if mother is not None:
+            mother.children_ids.append(child.id)
+
+    if config.retirement_age_years <= 0:
+        return
+    retire_min = demo.retirement_age_months
+    retire_max = min(
+        demo.max_age_months - 12,
+        demo.retirement_age_months + 18 * 12,
+    )
+    retirees = []
+    for _ in range(max(0, config.initial_retirees)):
+        age = engine.demographic_rng.randint(
+            retire_min, max(retire_min, retire_max)
+        )
+        sex = "F" if engine.demographic_rng.random() < 0.5 else "M"
+        retiree = engine.create_worker(
+            industry=Industry.SERVICE,
+            skill=1.0,
+            cash=0.0,
+            food=0.0,
+            age_months=age,
+            sex=sex,
+            is_child=False,
+            birth_tick=-age,
+            retired=True,
+        )
+        retiree.cloth = 0.0
+        retiree.housing = 0.0
+        retiree.hours = 0
+        retirees.append(retiree)
+
+    # 初始退休者在第一次月度养老金发放前没有任何现金；先由财政垫付
+    # 两个月养老金（可发债/央行融资），否则会在第 3 个月集体饿死。
+    gov = engine.government
+    if gov is not None and gov.pension_replacement > 0 and retirees:
+        pension_estimate = max(
+            WAGE_BASE * gov.pension_replacement,
+            FOOD_PER_WORKER * INITIAL_PRICES[Good.FOOD],
+        )
+        advance_total = pension_estimate * 2.0 * len(retirees)
+        if gov.cash < advance_total:
+            engine._government_finance(
+                advance_total - gov.cash, "pension_advance"
+            )
+        paid = min(advance_total, gov.cash)
+        if paid > 0:
+            per_retiree = paid / len(retirees)
+            for retiree in retirees:
+                retiree.cash += per_retiree
+            gov.cash -= paid
 
 
 def _capitalist(cid: str, cash: float, role: str):

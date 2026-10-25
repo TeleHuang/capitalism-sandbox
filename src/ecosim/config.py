@@ -106,6 +106,45 @@ BANK_LOAN_MONTHS = 3.0
 
 
 # ---------------------------------------------------------------------------
+# 人口 / 代际 / 退休金（V0.5）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DemographicsConfig:
+    """人口过程参数（V0.5）。
+
+    生育用年龄别月概率（ASFR/12，按 20–40 岁形状归一化），
+    死亡用年化 Gompertz 力 ``mu(a) = A + B * exp(C * a)``，
+    月死亡概率 ``q = 1 - exp(-mu/12)``；婴幼儿/儿童单独分段。
+    所有随机决策走 ``Engine.demographic_rng``，同 seed 可复现。
+    """
+
+    working_age_months: int = 14 * 12
+    retirement_age_months: int = 0          # 0 = 不退休（古典）
+    fertility_monthly: float = 0.024        # 育龄女性平均月生育概率（ASFR/12）
+    fertility_age_min_months: int = 20 * 12
+    fertility_age_max_months: int = 40 * 12
+    fertility_multiplier: float = 1.0
+    # 年化 Gompertz：mu(a) = A + B * exp(C * a)
+    mortality_A: float = 0.0015
+    mortality_B: float = 0.0001
+    mortality_C: float = 0.085
+    infant_mortality_annual: float = 0.18
+    child_mortality_annual: float = 0.02
+    max_age_months: int = 110 * 12
+    initial_age_min_months: int = 18 * 12
+    initial_age_max_months: int = 60 * 12
+    initial_female_share: float = 0.5
+    child_food: float = 0.05                # 吨 / 月
+    child_cloth: float = 0.5                # 件 / 月
+    child_housing: float = 0.1              # 平方米 / 月
+    pension_tax_rate: float = 0.0
+    pension_replacement: float = 0.0
+    pension_fund_initial: float = 0.0
+
+
+# ---------------------------------------------------------------------------
 # 生产目录
 # ---------------------------------------------------------------------------
 

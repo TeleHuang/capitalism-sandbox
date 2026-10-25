@@ -35,6 +35,18 @@ class Worker:
     is_owner_operator: bool = False
     land_owned: float = 0.0
 
+    # --- V0.5 人口/代际 ---
+    # 儿童与退休者仍保留在 self.workers 里，作为统一人口账本；
+    # 劳动市场只处理 is_child=False 且 retired=False 的成年人。
+    age_months: int = 0
+    sex: str = "F"
+    is_child: bool = False
+    retired: bool = False
+    parent_id: Optional[str] = None
+    children_ids: List[str] = field(default_factory=list)
+    pension_income: float = 0.0
+    birth_tick: int = 0
+
     # 上月实际消费，用于生活标准分类。
     consumed_food: float = 0.0
     consumed_cloth: float = 0.0
@@ -48,7 +60,17 @@ class Worker:
 
     @property
     def employed(self) -> bool:
-        return self.employer_id is not None
+        # 儿童/退休者即使因数据清理残留 employer_id，也不计为就业。
+        return (
+            self.employer_id is not None
+            and not self.is_child
+            and not self.retired
+        )
+
+    @property
+    def is_working_age(self) -> bool:
+        """劳动年龄人口：非儿童、非退休。"""
+        return not self.is_child and not self.retired
 
     def choose_hours(self, prices: Dict[Good, float]) -> int:
         """PRD 的劳动力再生产阶梯，这里做刻意简化。
@@ -56,6 +78,8 @@ class Worker:
         工人先确保储蓄；有了一定缓冲后，会用收入交换闲暇。
         价格是保留工资的一部分，因此食品昂贵时工人仍会保持 16 小时工作。
         """
+        if self.is_child or self.retired:
+            return 0
         basket = (
             FOOD_PER_WORKER * prices[Good.FOOD]
             + prices[Good.CLOTH]
@@ -153,6 +177,13 @@ class Enterprise:
 
 @dataclass
 class Capitalist:
+    """资产阶级。
+
+    V0.5 暂不给资本家加年龄/代际：他们按“王朝/不朽”处理，持有企业直到
+    仿真结束。因此 100 年尺度上的财富集中不能解释为人口或退休金机制的结果，
+    而是本版本刻意保留的建模限制。
+    """
+
     id: str
     cash: float
     role: str = "director"

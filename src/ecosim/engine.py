@@ -19,6 +19,7 @@ from .config import (
     CLOTH_PER_WORKER,
     COMFORT_MULTIPLIER,
     COMFORT_SAVINGS,
+    DemographicsConfig,
     LEISURE_SAVINGS,
     DEPRECIATION_MONTHS,
     DIVIDEND_PAYOUT,
@@ -91,6 +92,10 @@ class Engine:
     def __init__(self, seed: int = 1):
         self.seed = seed
         self.rng = random.Random(seed)
+        # 独立人口随机流：生育/年龄死亡/性别不扰动既有经济 RNG；
+        # 饥饿死亡仍使用 self.rng（保留既有死亡随机流语义）。
+        # 同 seed 下两条流都完全可复现。
+        self.demographic_rng = random.Random(seed + 1_000_003)
         self.tick = 0
         self.workers: Dict[str, Worker] = {}
         self.enterprises: Dict[str, Enterprise] = {}
@@ -124,6 +129,16 @@ class Engine:
         self.stats: List[dict] = []
         self.money_initial = 0.0
         self.dead_this_month = 0
+        # V0.5 人口过程（默认参数等价于古典剧本；build_scenario_1 会覆盖）。
+        self.demographics: DemographicsConfig = DemographicsConfig()
+        self.births_this_month = 0
+        self._orphaned_this_month = 0
+        self._age_deaths_this_month = 0
+        self._hunger_deaths_this_month = 0
+        self._pension_shortfall = 0.0
+        self._food_relief_this_month = 0.0
+        self._food_relief_shortfall = 0.0
+        self._food_levy_this_month = 0.0
         self.production_month: Dict[Good, float] = {g: 0.0 for g in Good}
         self._next_worker = 0
         self._next_enterprise = 0
@@ -151,7 +166,10 @@ class Engine:
         return [
             self.workers[worker_id]
             for worker_id in enterprise.workers
-            if worker_id in self.workers and self.workers[worker_id].alive
+            if worker_id in self.workers
+            and self.workers[worker_id].alive
+            and not self.workers[worker_id].is_child
+            and not self.workers[worker_id].retired
         ]
 
     def sector_params(self, industry: Industry):
@@ -168,9 +186,29 @@ class Engine:
         wages = [
             w.wage
             for w in self.workers.values()
-            if w.alive and w.employed and w.wage > 0
+            if w.alive
+            and w.employed
+            and not w.is_child
+            and not w.retired
+            and w.wage > 0
         ]
         return sum(wages) / len(wages) if wages else WAGE_BASE
+
+    def feeding_units(self) -> float:
+        """食品需求当量：儿童按 0.5 个成人计算。"""
+        units = 0.0
+        for worker in self.workers.values():
+            if worker.alive:
+                units += 0.5 if worker.is_child else 1.0
+        return max(1.0, units)
+
+    def labor_force_workers(self) -> List[Worker]:
+        """劳动年龄、非退休、非儿童的在劳动市场人口。"""
+        return [
+            worker
+            for worker in self.workers.values()
+            if worker.alive and worker.is_working_age
+        ]
 
     def total_money(self) -> float:
         return (
@@ -239,13 +277,34 @@ class Engine:
         skill: float = 1.0,
         cash: float = 0.0,
         food: float = FOOD_PER_WORKER,
+        age_months: Optional[int] = None,
+        sex: Optional[str] = None,
+        is_child: Optional[bool] = None,
+        parent_id: Optional[str] = None,
+        birth_tick: Optional[int] = None,
+        retired: bool = False,
     ) -> Worker:
+        if age_months is None:
+            # 直接创建（测试/新增工人）默认是成年人；初始剧本显式传入年龄。
+            age_months = self.demographics.working_age_months + 10 * 12
+        if sex is None:
+            sex = "F"
+        if is_child is None:
+            is_child = age_months < self.demographics.working_age_months
+        if birth_tick is None:
+            birth_tick = self.tick - age_months
         worker = Worker(
             id=self.new_worker_id(),
             industry=industry,
             skill=skill,
             cash=cash,
             food=food,
+            age_months=age_months,
+            sex=sex,
+            is_child=is_child,
+            retired=retired,
+            parent_id=parent_id,
+            birth_tick=birth_tick,
         )
         self.workers[worker.id] = worker
         return worker
@@ -397,6 +456,14 @@ class Engine:
     def step(self) -> dict:
         self.tick += 1
         self.dead_this_month = 0
+        self.births_this_month = 0
+        self._orphaned_this_month = 0
+        self._age_deaths_this_month = 0
+        self._hunger_deaths_this_month = 0
+        self._pension_shortfall = 0.0
+        self._food_relief_this_month = 0.0
+        self._food_relief_shortfall = 0.0
+        self._food_levy_this_month = 0.0
         self._warnings = []
         self.production_month = {g: 0.0 for g in Good}
         for enterprise in self.enterprises.values():
@@ -405,6 +472,8 @@ class Engine:
         if self.government is not None:
             self.government.reset_month()
         self._update_skills()
+        # 先 aging/退休/死亡，再出生/劳动市场，最后消费（设计文档 §3）。
+        self._demography_pre()
         self._update_expectations_and_plans()
         if self.bank_intermediation:
             self._bank_intermediation()
@@ -413,6 +482,7 @@ class Engine:
         self._pay_government_wages()
         self._produce_all()
         self._produce_government()
+        self._collect_food_relief_levy()
         self._update_price_bands()
         run_land_market(self)
         self._investment_decisions()
@@ -440,6 +510,9 @@ class Engine:
         self._finance()
         self._government_settlement()
         self._cleanup_dormant()
+        # 粮食平准库存的紧急救济：市场没成交但库存仍在时，避免纯现金
+        # 约束造成的饥荒。只转移实物，不改变任何现金，因此不创造货币。
+        self._distribute_food_relief()
         self._consume_and_demographics()
         stat = self._record_stats()
         self.market.consumption_spending = 0.0
@@ -455,6 +528,301 @@ class Engine:
             if not worker.alive or not worker.employed:
                 continue
             worker.skill = min(SKILL_MAX, worker.skill + SKILL_GROWTH_PER_MONTH)
+
+    # ------------------------------------------------------------------
+    # 人口过程：aging / 出生 / 退休 / 死亡
+    # ------------------------------------------------------------------
+    def _monthly_mortality(self, worker: Worker) -> float:
+        """年龄别月度死亡概率（Gompertz + 婴幼儿/儿童分段）。"""
+        demo = self.demographics
+        age = max(0, worker.age_months)
+        if age >= demo.max_age_months:
+            return 1.0
+        if age < 12:
+            annual = demo.infant_mortality_annual
+        elif age < 60:
+            annual = demo.child_mortality_annual
+        else:
+            mu = demo.mortality_A + demo.mortality_B * math.exp(
+                demo.mortality_C * age / 12.0
+            )
+            annual = 1.0 - math.exp(-max(0.0, mu))
+        monthly = 1.0 - (1.0 - max(0.0, min(1.0, annual))) ** (1.0 / 12.0)
+        return max(0.0, min(1.0, monthly))
+
+    @staticmethod
+    def _fertility_age_shape(age_months: int) -> float:
+        """20–40 岁年龄别生育率形状（均值归一化为 1）。
+
+        峰值在 25–29 岁；这样 ``fertility_monthly`` 仍可直接近似
+        ``TFR / (12 * 育龄年数)``，便于按 TFR 目标校准。
+        """
+        years = age_months / 12.0
+        if years < 20 or years > 40:
+            return 0.0
+        if years < 25:
+            weight = 0.7
+        elif years < 30:
+            weight = 1.2
+        elif years < 35:
+            weight = 1.1
+        elif years < 40:
+            weight = 0.8
+        else:
+            weight = 0.2
+        # 20..40 岁（含端点）的平均权重约为 0.9143。
+        return weight / 0.9143
+
+    def _birth_probability(self, mother: Worker) -> float:
+        """育龄女性月度生育概率。
+
+        ``p = min(0.2, ASFR(a)/12 * m * parity)``；
+        ``m = clip((y/y0)^0.1 * (food/food0)^0.3, 0.3, 1.5)``，
+        食物短缺和极端贫困显著压低生育。
+        """
+        demo = self.demographics
+        if mother.sex != "F" or mother.is_child or mother.retired:
+            return 0.0
+        if not (
+            demo.fertility_age_min_months
+            <= mother.age_months
+            <= demo.fertility_age_max_months
+        ):
+            return 0.0
+        shape = self._fertility_age_shape(mother.age_months)
+        if shape <= 0:
+            return 0.0
+        score = {
+            "survival": 0.0,
+            "subsistence": 0.5,
+            "comfort": 1.0,
+            "leisure": 1.2,
+            "child": 0.0,
+        }.get(mother.living_standard, 0.5)
+        # y/y0 的生活标准代理：0.5（生存）到 1.7（悠闲）。
+        y_ratio = max(0.1, 0.5 + score)
+        # 用上月实际消费而不是当前库存：月内食品库存通常会被吃空，
+        # 用库存会把所有家庭都误判为饥荒。
+        if mother.hunger_months > 0:
+            food_ratio = 0.3
+        else:
+            food_ratio = max(
+                0.05,
+                min(
+                    1.5,
+                    mother.consumed_food / max(FOOD_PER_WORKER, 1e-9),
+                ),
+            )
+        multiplier = (
+            (y_ratio ** 0.1) * (food_ratio ** 0.3)
+        )
+        multiplier = max(0.3, min(1.5, multiplier))
+        living_children = sum(
+            1
+            for child_id in mother.children_ids
+            if child_id in self.workers
+            and self.workers[child_id].alive
+            and self.workers[child_id].is_child
+        )
+        parity_factor = 1.0 / (1.0 + 0.10 * living_children)
+        probability = (
+            demo.fertility_monthly
+            * demo.fertility_multiplier
+            * shape
+            * multiplier
+            * parity_factor
+        )
+        return max(0.0, min(0.2, probability))
+
+    def _give_birth(self, mother: Worker) -> Worker:
+        sex = "F" if self.demographic_rng.random() < 0.5 else "M"
+        child = self.create_worker(
+            industry=mother.industry,
+            skill=0.0,
+            cash=0.0,
+            food=0.0,
+            age_months=0,
+            sex=sex,
+            is_child=True,
+            parent_id=mother.id,
+            birth_tick=self.tick,
+        )
+        child.cloth = 0.0
+        child.housing = 0.0
+        child.service = 0.0
+        child.hours = 0
+        child.living_standard = "child"
+        mother.children_ids.append(child.id)
+        self.births_this_month += 1
+        return child
+
+    def _retire_worker(self, worker: Worker) -> None:
+        """到龄退休：退出企业/就业保障与劳动市场。"""
+        employer = self.enterprises.get(worker.employer_id or "")
+        if employer is not None and worker.id in employer.workers:
+            employer.workers.remove(worker.id)
+        if self.government is not None and worker.id in self.government.jg_workers:
+            self.government.jg_workers.remove(worker.id)
+        worker.employer_id = None
+        worker.wage = 0.0
+        worker.hours = 0
+        worker.ui_months = 0
+        worker.retired = True
+
+    def _demography_pre(self) -> None:
+        demo = self.demographics
+        # 1) 年龄 +1 月；儿童成年；雇员/劳动年龄人口退休。
+        for worker in list(self.workers.values()):
+            if not worker.alive:
+                continue
+            worker.age_months += 1
+            if worker.is_child and worker.age_months >= demo.working_age_months:
+                worker.is_child = False
+                worker.skill = max(1.0, worker.skill)
+                parent = self.workers.get(worker.parent_id or "")
+                worker.industry = (
+                    parent.industry
+                    if parent is not None and parent.alive
+                    else Industry.SERVICE
+                )
+                worker.hours = 16
+            if (
+                not worker.is_child
+                and not worker.retired
+                and demo.retirement_age_months > 0
+                and worker.age_months >= demo.retirement_age_months
+                # 自耕农/自雇摊主不强制退休：V0.5 还没有土地/经营权的
+                # 代际继承机制，强制退休会让家庭农场直接消失。
+                and not worker.is_owner_operator
+            ):
+                self._retire_worker(worker)
+
+        # 2) 年龄别死亡（在出生/劳动市场之前；死亡者当月不参与）。
+        for worker in list(self.workers.values()):
+            if not worker.alive:
+                continue
+            if self.demographic_rng.random() < self._monthly_mortality(worker):
+                self._kill_worker(worker, cause="age")
+
+        # 3) 育龄女性生育；新生儿当月加入人口并领取 allowance。
+        for mother in list(self.workers.values()):
+            if not mother.alive:
+                continue
+            probability = self._birth_probability(mother)
+            if (
+                probability > 0
+                and self.demographic_rng.random() < probability
+            ):
+                self._give_birth(mother)
+
+    def _kill_worker(self, worker: Worker, cause: str = "age") -> None:
+        """死亡清算：现金入银行、清雇主/就业保障/家庭关系。"""
+        if not worker.alive:
+            return
+        worker.alive = False
+        self.dead_this_month += 1
+        if cause == "hunger":
+            self._hunger_deaths_this_month += 1
+        else:
+            self._age_deaths_this_month += 1
+
+        self.bank.cash += max(0.0, worker.cash)
+        worker.cash = 0.0
+        self.bank.deposits.pop(worker.id, 0.0)
+
+        employer = self.enterprises.get(worker.employer_id or "")
+        if employer is not None and worker.id in employer.workers:
+            employer.workers.remove(worker.id)
+        worker.employer_id = None
+        worker.wage = 0.0
+        worker.hours = 0
+        if self.government is not None and worker.id in self.government.jg_workers:
+            self.government.jg_workers.remove(worker.id)
+
+        # 从父母/监护人的子女列表中移除。
+        parent = self.workers.get(worker.parent_id or "")
+        if parent is not None and worker.id in parent.children_ids:
+            parent.children_ids.remove(worker.id)
+        # 死亡者若有未成年子女，孩子仍存活但 allowance 归零；
+        # 不凭空创造政府/慈善资金，只记录 warning。
+        if worker.children_ids:
+            for child_id in list(worker.children_ids):
+                child = self.workers.get(child_id)
+                if child is not None and child.alive:
+                    child.parent_id = None
+                    self._orphaned_this_month += 1
+            worker.children_ids.clear()
+        worker.parent_id = None
+
+        self._settle_estate(worker)
+
+    def _pay_child_allowances(self, prices: Dict[Good, float]) -> None:
+        """家长向儿童转移现金（allowance），儿童自己挂买单。
+
+        先给家长保留半个成人温饱篮子；不足时按儿童人数等比缩减。
+        这是纯现金转移，货币守恒。
+        """
+        demo = self.demographics
+        child_basket = (
+            demo.child_food * prices.get(Good.FOOD, 0.0)
+            + demo.child_cloth * prices.get(Good.CLOTH, 0.0)
+            + demo.child_housing * prices.get(Good.BUILDING, 0.0)
+        )
+        if child_basket <= 0:
+            return
+        # 家长先保留自己的全额口粮现金，再转移剩余部分；否则多子女家庭
+        # 会把家长的食品预算挤掉，造成“父母饿死、儿童成孤儿”的连锁死亡。
+        adult_reserve = FOOD_PER_WORKER * prices.get(Good.FOOD, 0.0)
+        for parent in list(self.workers.values()):
+            if not parent.alive or parent.is_child:
+                continue
+            children = [
+                self.workers[child_id]
+                for child_id in parent.children_ids
+                if child_id in self.workers
+                and self.workers[child_id].alive
+                and self.workers[child_id].is_child
+            ]
+            if not children:
+                continue
+            available = max(0.0, parent.cash - adult_reserve)
+            if available <= 1e-9:
+                continue
+            required = child_basket * len(children)
+            pool = min(required, available)
+            if pool <= 1e-9:
+                continue
+            share = pool / len(children)
+            for child in children:
+                parent.cash -= share
+                child.cash += share
+
+    def _submit_child_orders(self, child: Worker, prices: Dict[Good, float]) -> None:
+        """儿童用 allowance 购买食品/衣物/住房（不含服务）。"""
+        demo = self.demographics
+        targets = (
+            (Good.FOOD, demo.child_food, 1.05),
+            (Good.CLOTH, demo.child_cloth, 1.04),
+            (Good.BUILDING, demo.child_housing, 1.04),
+        )
+        stock = {
+            Good.FOOD: child.food,
+            Good.CLOTH: child.cloth,
+            Good.BUILDING: child.housing,
+        }
+        cash_left = max(0.0, child.cash)
+        for good, target, bid_multiplier in targets:
+            gap = max(0.0, target - stock[good])
+            if gap <= 1e-9 or cash_left <= 1e-9:
+                continue
+            bid = prices.get(good, 1.0) * bid_multiplier
+            if good != Good.FOOD:
+                gap *= max(0.0, getattr(self, "worker_demand_scale", 1.0))
+            quantity = min(gap, cash_left / max(bid, 1e-9))
+            if quantity <= 1e-9:
+                continue
+            self.market.submit_buy(child, good, quantity, bid)
+            cash_left -= quantity * bid
 
     def _update_expectations_and_plans(self) -> None:
         """L1：按库存/欠交/需求预测生成生产计划。
@@ -476,8 +844,7 @@ class Engine:
             enterprise.inv(Good.FOOD)
             for enterprise in self.active_enterprises(Industry.AGRICULTURE)
         )
-        alive_workers = sum(1 for worker in self.workers.values() if worker.alive)
-        monthly_food_need = max(1.0, alive_workers * FOOD_PER_WORKER)
+        monthly_food_need = max(1.0, self.feeding_units() * FOOD_PER_WORKER)
         essential = {
             Good.COAL,
             Good.IRON_ORE,
@@ -563,11 +930,7 @@ class Engine:
             enterprise.inv(Good.FOOD)
             for enterprise in self.active_enterprises(Industry.AGRICULTURE)
         )
-        food_need = max(
-            1.0,
-            sum(1 for worker in self.workers.values() if worker.alive)
-            * FOOD_PER_WORKER,
-        )
+        food_need = max(1.0, self.feeding_units() * FOOD_PER_WORKER)
         food_security = food_stock < 3.0 * food_need
         fertilizer_short = (
             FERTILIZER_HIRING_PRIORITY and self.fertilizer_supply_short()
@@ -639,7 +1002,10 @@ class Engine:
         unemployed = [
             w
             for w in self.workers.values()
-            if w.alive and not w.employed and not w.is_owner_operator
+            if w.alive
+            and w.is_working_age
+            and not w.employed
+            and not w.is_owner_operator
         ]
         unemployed.sort(key=lambda w: (w.cash, w.id))
         hiring = sorted(
@@ -670,7 +1036,12 @@ class Engine:
             for worker in self.workers.values():
                 if switches >= 20 or not hiring:
                     break
-                if not worker.alive or not worker.employed or worker.is_owner_operator:
+                if (
+                    not worker.alive
+                    or not worker.is_working_age
+                    or not worker.employed
+                    or worker.is_owner_operator
+                ):
                     continue
                 best_id = hiring[0]
                 best_offer = offers[best_id]
@@ -745,6 +1116,7 @@ class Engine:
             worker
             for worker in self.workers.values()
             if worker.alive
+            and worker.is_working_age
             and not worker.employed
             and not worker.is_owner_operator
         ]
@@ -822,7 +1194,7 @@ class Engine:
                     capitalist, (capitalist.cash - 10_000.0) * 0.10
                 )
         for worker in self.workers.values():
-            if worker.alive and worker.cash > 1000.0:
+            if worker.alive and worker.is_working_age and worker.cash > 1000.0:
                 self.bank.deposit(worker, (worker.cash - 1000.0) * 0.02)
         self.bank.pay_deposit_interest(
             {**self.workers, **self.capitalists}
@@ -874,7 +1246,10 @@ class Engine:
         unemployed = [
             worker
             for worker in self.workers.values()
-            if worker.alive and not worker.employed and not worker.is_owner_operator
+            if worker.alive
+            and worker.is_working_age
+            and not worker.employed
+            and not worker.is_owner_operator
         ]
         unemployed.sort(key=lambda worker: (worker.cash, worker.id))
         for worker in unemployed:
@@ -976,8 +1351,7 @@ class Engine:
         reserve = self.food_reserve
         price = self.market.reference_prices[Good.FOOD]
         initial = INITIAL_PRICES[Good.FOOD]
-        alive = sum(1 for worker in self.workers.values() if worker.alive)
-        monthly_need = max(1.0, alive * FOOD_PER_WORKER)
+        monthly_need = max(1.0, self.feeding_units() * FOOD_PER_WORKER)
         if price > 1.15 * initial and reserve.food > 1e-9:
             quantity = min(reserve.food, 0.50 * monthly_need)
             if quantity > 1e-9:
@@ -1049,10 +1423,30 @@ class Engine:
             enterprise.cash -= tax
             gov.cash += tax
             gov.tax_revenue += tax
-        # 失业救济
+        # 养老金缴费（PAYG）：从在业工人现金转入养老基金（政府现金台账）。
+        if gov.pension_tax_rate > 0:
+            for worker in self.workers.values():
+                if not worker.alive or not worker.employed:
+                    continue
+                income = worker.wage * worker.effective_labor
+                if income <= 0:
+                    continue
+                contribution = min(
+                    worker.cash, income * gov.pension_tax_rate
+                )
+                if contribution <= 1e-9:
+                    continue
+                worker.cash -= contribution
+                gov.cash += contribution
+                gov.pension_fund += contribution
+                gov.pension_contributions += contribution
+                gov.pension_revenue += contribution
+        # 失业救济（儿童/退休者不进入失业救济）
         avg_wage = self.average_wage()
         for worker in self.workers.values():
             if not worker.alive:
+                continue
+            if worker.is_child or worker.retired:
                 continue
             if worker.employed:
                 worker.ui_months = 0
@@ -1071,6 +1465,60 @@ class Engine:
                 worker.cash += paid
                 gov.transfers += paid
             worker.ui_months += 1
+        # 养老金发放：替代率 × 社会平均工资；基金不足时显式融资/按比例发放。
+        if gov.pension_replacement > 0:
+            retirees = [
+                worker
+                for worker in self.workers.values()
+                if worker.alive and worker.retired
+            ]
+            for worker in retirees:
+                worker.pension_income = 0.0
+            # 替代率 × 平均工资；若低于食品温饱线，按食品线兜底。
+            # 这是显式的社会养老金下限，仍由基金/财政融资，不创造货币。
+            food_line = FOOD_PER_WORKER * self.market.reference_prices.get(
+                Good.FOOD, 0.0
+            )
+            benefit = max(
+                gov.pension_replacement * avg_wage,
+                food_line,
+            )
+            due = benefit * len(retirees)
+            if due > 1e-9:
+                if gov.cash < due:
+                    self._government_finance(due - gov.cash, "pension")
+                if gov.pension_fund < due:
+                    topup = min(
+                        due - gov.pension_fund,
+                        max(0.0, gov.cash),
+                    )
+                    if topup > 0:
+                        gov.pension_fund += topup
+                        gov.pension_subsidy += topup
+                factor = min(
+                    1.0,
+                    gov.pension_fund / due,
+                    gov.cash / due,
+                )
+                if factor < 1.0 - 1e-9:
+                    self._pension_shortfall += due * (1.0 - factor)
+                paid_total = 0.0
+                for worker in retirees:
+                    paid = benefit * factor
+                    if paid <= 1e-9:
+                        continue
+                    gov.cash -= paid
+                    gov.pension_fund -= paid
+                    worker.cash += paid
+                    worker.pension_income = paid
+                    paid_total += paid
+                gov.pension_spending += paid_total
+                # 浮点误差可能留下 -1e-12 量级的“负基金”；显式归零，
+                # 真正的赤字已通过 pension_subsidy/按比例发放记录。
+                if -1e-6 < gov.pension_fund < 0.0:
+                    gov.pension_fund = 0.0
+        if gov.pension_revenue > 0 or gov.pension_spending > 0:
+            gov.pension_balance = gov.pension_revenue - gov.pension_spending
         # 国债利息
         if gov.debt > 0 and gov.bond_holders:
             interest = gov.debt * self.bank.interest_rate
@@ -1093,11 +1541,16 @@ class Engine:
                         else:
                             self.bank.cash += paid * share
         gov.spending += self.market.government_spending
+        # 养老金会计进入显式预算恒等式：缴费是政府收入侧，发放是支出侧。
+        # pension_subsidy 是基金缺口的融资（发债/央行），属于融资而非收入，
+        # 因此不计入 deficit 公式；它只进入基金台账。
         gov.deficit = (
             gov.spending
             + gov.transfers
+            + gov.pension_spending
             + gov.interest_paid
             - gov.tax_revenue
+            - gov.pension_contributions
         )
 
     def _produce_all(self) -> None:
@@ -1368,8 +1821,13 @@ class Engine:
 
     def _submit_household_orders(self) -> None:
         prices = self.market.reference_prices
+        # 家长先把儿童预算以现金转给儿童；儿童随后独立挂买单。
+        self._pay_child_allowances(prices)
         for worker in self.workers.values():
             if not worker.alive:
+                continue
+            if worker.is_child:
+                self._submit_child_orders(worker, prices)
                 continue
             if self.demand_regime == "les":
                 self._submit_les_worker_orders(worker, prices)
@@ -1828,9 +2286,11 @@ class Engine:
         死者会继续“持有”土地并占据雇工/信贷资源。
         """
         ent_id = self.land.enterprise_by_owner.pop(worker.id, None)
+        farm_land = 0.0
         if ent_id:
             enterprise = self.enterprises.get(ent_id)
             if enterprise and enterprise.active:
+                farm_land = enterprise.land
                 for worker_id in list(enterprise.workers):
                     other = self.workers.get(worker_id)
                     if other and other.alive:
@@ -1855,8 +2315,11 @@ class Engine:
                 enterprise.land = 0.0
                 enterprise.active = False
         mu = self.land.owners.pop(worker.id, 0.0)
-        if mu > 0:
-            self.land.estate_land += mu
+        # 家庭农场的 enterprise.land 是 land.owners 的会计镜像：上面已把
+        # enterprise.land 计入 estate_land，这里只补多出来的部分，避免土地
+        # 在死亡清算时被重复计算。
+        if mu > farm_land + 1e-9:
+            self.land.estate_land += mu - farm_land
         # 死亡储户的存款留在银行；从存款台账移除，避免利息记到死者。
         self.bank.deposits.pop(worker.id, 0.0)
         worker.land_owned = 0.0
@@ -1865,15 +2328,95 @@ class Engine:
     # ------------------------------------------------------------------
     # 消费 / 人口
     # ------------------------------------------------------------------
-    def _consume_and_demographics(self) -> None:
+    def _collect_food_relief_levy(self) -> None:
+        """粮食救济实物税：库存低于 3 个月需求时，从当月农业产出征收。
+
+        这是实物转移（不是货币创造）：用于维持粮食平准库存的救济能力。
+        库存充足时不征收；税率最高 15%，避免长期挤压农场销售。
+        """
+        monthly_need = max(1.0, self.feeding_units() * FOOD_PER_WORKER)
+        target = 3.0 * monthly_need
+        reserve = self.food_reserve
+        if reserve.food >= target:
+            return
+        # 缺口越大，税率越高（0–25%）。这是实物税，用于维持救济库存。
+        rate = min(0.25, 0.25 * (target - reserve.food) / target)
+        if rate <= 1e-9:
+            return
+        levied = 0.0
+        for enterprise in self.active_enterprises(Industry.AGRICULTURE):
+            available = enterprise.inv(Good.FOOD)
+            if available <= 1e-9:
+                continue
+            take = min(available, enterprise.last_output * rate)
+            if take <= 1e-9:
+                continue
+            enterprise.inventory[Good.FOOD] = available - take
+            reserve.food += take
+            levied += take
+        self._food_levy_this_month = levied
+
+    def _distribute_food_relief(self) -> None:
+        """粮食库存紧急救济。
+
+        市场上食物有库存、但部分家庭因现金约束买不到时，从粮食平准
+        库存直接转移实物。纯实物转移，不改变现金总量；库存耗尽后
+        饥饿死亡机制仍会生效。每月最多释放库存的 10%（至少 5 吨），
+        优先救助饥饿月份最多、现金最少的存活人口。
+        """
+        reserve = self.food_reserve
+        if reserve.food <= 1e-9:
+            return
+        demo = self.demographics
+        cap = min(reserve.food, max(10.0, 0.25 * reserve.food))
+        candidates = []
         for worker in self.workers.values():
             if not worker.alive:
                 continue
-            comfort = worker.living_standard in ("comfort", "leisure")
-            mult = COMFORT_MULTIPLIER if comfort else 1.0
-            food_target = FOOD_PER_WORKER * mult
-            cloth_target = CLOTH_PER_WORKER * mult
-            housing_target = HOUSING_PER_WORKER * mult
+            target = demo.child_food if worker.is_child else FOOD_PER_WORKER
+            if worker.hunger_months >= 1 and worker.food + 1e-9 < target:
+                candidates.append((worker.hunger_months, worker.cash, worker.id))
+        if not candidates:
+            return
+        candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+        relieved = 0.0
+        unmet = 0.0
+        for _, _, worker_id in candidates:
+            worker = self.workers[worker_id]
+            target = demo.child_food if worker.is_child else FOOD_PER_WORKER
+            need = max(0.0, target - worker.food)
+            if need <= 1e-9:
+                continue
+            if cap <= 1e-9:
+                unmet += need
+                continue
+            take = min(need, cap)
+            worker.food += take
+            reserve.food -= take
+            cap -= take
+            relieved += take
+        self._food_relief_this_month = relieved
+        self._food_relief_shortfall = unmet
+
+    def _consume_and_demographics(self) -> None:
+        demo = self.demographics
+        for worker in self.workers.values():
+            if not worker.alive:
+                continue
+            if worker.is_child:
+                food_target = demo.child_food
+                cloth_target = demo.child_cloth
+                housing_target = demo.child_housing
+                service_target = 0.0
+                hunger_target = demo.child_food
+            else:
+                comfort = worker.living_standard in ("comfort", "leisure")
+                mult = COMFORT_MULTIPLIER if comfort else 1.0
+                food_target = FOOD_PER_WORKER * mult
+                cloth_target = CLOTH_PER_WORKER * mult
+                housing_target = HOUSING_PER_WORKER * mult
+                service_target = SERVICE_PER_HOUSEHOLD * mult
+                hunger_target = FOOD_PER_WORKER
 
             worker.consumed_food = min(worker.food, food_target)
             worker.food -= worker.consumed_food
@@ -1881,11 +2424,12 @@ class Engine:
             worker.cloth -= worker.consumed_cloth
             worker.consumed_housing = min(worker.housing, housing_target)
             worker.housing -= worker.consumed_housing
-            service_target = SERVICE_PER_HOUSEHOLD * mult
             worker.consumed_service = min(worker.service, service_target)
             worker.service -= worker.consumed_service
 
-            if worker.consumed_food + 1e-9 < FOOD_PER_WORKER:
+            # 90% 容差：轻微不足（价格/撮合造成的 1–3% 缺口）不应被当作
+            # 连续饥荒累计；真正低于九成口粮才进入饥饿死亡路径。
+            if worker.consumed_food + 1e-9 < 0.90 * hunger_target:
                 worker.hunger_months += 1
             else:
                 worker.hunger_months = 0
@@ -1896,16 +2440,13 @@ class Engine:
                     0.08 + 0.08 * (worker.hunger_months - 3),
                 )
                 if self.rng.random() < chance:
-                    worker.alive = False
-                    self.dead_this_month += 1
-                    self.bank.cash += max(0.0, worker.cash)
-                    worker.cash = 0.0
-                    self._settle_estate(worker)
-                    employer = self.enterprises.get(worker.employer_id or "")
-                    if employer and worker.id in employer.workers:
-                        employer.workers.remove(worker.id)
-                    worker.employer_id = None
+                    self._kill_worker(worker, cause="hunger")
                     continue
+
+            if worker.is_child:
+                # 儿童保留独立类别，避免把成人温饱线套到半个篮子上。
+                worker.living_standard = "child"
+                continue
 
             comfort_food = FOOD_PER_WORKER * COMFORT_MULTIPLIER
             comfort_cloth = CLOTH_PER_WORKER * COMFORT_MULTIPLIER
@@ -1949,8 +2490,12 @@ class Engine:
     def _record_stats(self) -> dict:
         prices = self.market.reference_prices
         alive_workers = [w for w in self.workers.values() if w.alive]
-        employed = [w for w in alive_workers if w.employed]
-        unemployed = len(alive_workers) - len(employed)
+        # 劳动年龄人口 = 非儿童、非退休；失业率分母只包含这部分。
+        labor_force = [w for w in alive_workers if w.is_working_age]
+        employed = [w for w in labor_force if w.employed]
+        unemployed = len(labor_force) - len(employed)
+        children_count = sum(1 for w in alive_workers if w.is_child)
+        retiree_count = sum(1 for w in alive_workers if w.retired)
 
         ag_workers = [
             w
@@ -2011,11 +2556,17 @@ class Engine:
             ind.value: len(self.active_enterprises(ind)) for ind in Industry
         }
         workers_by_industry = {ind.value: 0 for ind in Industry}
-        for worker in alive_workers:
+        for worker in labor_force:
             if worker.industry in workers_by_industry:
                 workers_by_industry[worker.industry.value] += 1
 
-        living = {"survival": 0, "subsistence": 0, "comfort": 0, "leisure": 0}
+        living = {
+            "survival": 0,
+            "subsistence": 0,
+            "comfort": 0,
+            "leisure": 0,
+            "child": 0,
+        }
         for worker in alive_workers:
             living[worker.living_standard] = living.get(worker.living_standard, 0) + 1
 
@@ -2069,6 +2620,50 @@ class Engine:
                     f"{GOOD_LABELS[good]} 连续 {streak} 个月产量为 0"
                 )
 
+        # --- 人口结构统计 ---
+        ages_months = sorted(worker.age_months for worker in alive_workers)
+        population = len(ages_months)
+        if population:
+            average_age = sum(ages_months) / population / 12.0
+            middle = population // 2
+            if population % 2:
+                median_age = ages_months[middle] / 12.0
+            else:
+                median_age = (
+                    ages_months[middle - 1] + ages_months[middle]
+                ) / 2.0 / 12.0
+        else:
+            average_age = 0.0
+            median_age = 0.0
+        age_histogram = {
+            f"{start}-{start + 4}" if start < 85 else "85+": 0
+            for start in range(0, 90, 5)
+        }
+        for age_months in ages_months:
+            bucket = age_months // 60
+            if bucket >= 17:
+                age_histogram["85+"] += 1
+            else:
+                age_histogram[f"{bucket * 5}-{bucket * 5 + 4}"] += 1
+        orphans = sum(
+            1
+            for worker in alive_workers
+            if worker.is_child and worker.parent_id is None
+        )
+        if self._orphaned_this_month > 0:
+            self._warnings.append(
+                f"本月 {self._orphaned_this_month} 名儿童因家长死亡成为孤儿；"
+                "allowance 归零（不凭空创造兜底资金）"
+            )
+        if self._pension_shortfall > 1e-6:
+            self._warnings.append(
+                f"养老金基金缺口 {self._pension_shortfall:.2f}，已按比例发放"
+            )
+        if self._food_relief_shortfall > 1e-6:
+            self._warnings.append(
+                f"粮食救济库存不足，缺口 {self._food_relief_shortfall:.2f} 吨"
+            )
+
         projects_by_industry = {ind.value: 0 for ind in Industry}
         for project in self.projects.values():
             if project.active:
@@ -2081,9 +2676,35 @@ class Engine:
         government = self.government
         stat = {
             "tick": self.tick,
-            "alive": len(alive_workers),
-            "dead_this_month": self.dead_this_month,
+            # alive 保持历史语义 = 总人口；population 是同一口径的显式别名。
+            "alive": population,
+            "population": population,
+            "children": children_count,
+            "working_age": len(labor_force),
+            "retirees": retiree_count,
+            "labor_force": len(labor_force),
+            "employed": len(employed),
             "unemployed": unemployed,
+            "births": self.births_this_month,
+            "deaths": self.dead_this_month,
+            "age_deaths": self._age_deaths_this_month,
+            "hunger_deaths": self._hunger_deaths_this_month,
+            "birth_rate": self.births_this_month / max(population, 1),
+            "death_rate": self.dead_this_month / max(population, 1),
+            "birth_rate_annual": (
+                12.0 * self.births_this_month / max(population, 1)
+            ),
+            "death_rate_annual": (
+                12.0 * self.dead_this_month / max(population, 1)
+            ),
+            "dependency_ratio": retiree_count / max(len(employed), 1),
+            "old_age_dependency": retiree_count / max(len(labor_force), 1),
+            "child_dependency": children_count / max(len(labor_force), 1),
+            "age_histogram": age_histogram,
+            "average_age": average_age,
+            "median_age": median_age,
+            "orphans": orphans,
+            "dead_this_month": self.dead_this_month,
             "active_enterprises": len(self.active_enterprises()),
             "money_total": money_total,
             "bank_cash": self.bank.cash,
@@ -2105,6 +2726,24 @@ class Engine:
             "government_deficit": government.deficit if government else 0.0,
             "government_jg_workers": (
                 len(government.jg_workers) if government else 0
+            ),
+            "pension_contributions": (
+                government.pension_contributions if government else 0.0
+            ),
+            "pension_subsidy": (
+                government.pension_subsidy if government else 0.0
+            ),
+            "pension_revenue": (
+                government.pension_revenue if government else 0.0
+            ),
+            "pension_spending": (
+                government.pension_spending if government else 0.0
+            ),
+            "pension_balance": (
+                government.pension_balance if government else 0.0
+            ),
+            "pension_fund": (
+                government.pension_fund if government else 0.0
             ),
             "central_bank_money": (
                 government.central_bank_money if government else 0.0
@@ -2132,6 +2771,9 @@ class Engine:
             "estate_land": self.land.estate_land,
             "food_reserve": self.food_reserve.food,
             "food_reserve_cash": self.food_reserve.cash,
+            "food_relief": self._food_relief_this_month,
+            "food_relief_unmet": self._food_relief_shortfall,
+            "food_levy": self._food_levy_this_month,
             "asset_pool_inventory_value": sum(
                 qty * prices.get(good, 0.0)
                 for good, qty in self.asset_pool.inventory.items()
@@ -2144,7 +2786,7 @@ class Engine:
             "gdp": gdp,
             "consumption": self.market.consumption_spending,
             "investment": self.market.investment_spending,
-            "unemployment_rate": unemployed / max(len(alive_workers), 1),
+            "unemployment_rate": unemployed / max(len(labor_force), 1),
             "profit_rate": profit_rate,
             "all_profit_rate": all_profit_rate,
             "capital_stock": total_capital,

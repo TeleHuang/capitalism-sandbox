@@ -34,12 +34,17 @@ class GovernmentTests(unittest.TestCase):
         self.assertAlmostEqual(
             final["money_total"], engine.money_initial, places=2
         )
+        # V0.5 起养老金进入显式预算恒等式：缴费在收入侧、发放在支出侧。
+        # 这是有意的会计口径变化；pension_subsidy 是融资（发债/央行），
+        # 不属于当期收入。
         self.assertAlmostEqual(
             final["government_deficit"],
             final["government_spending"]
             + final["government_transfers"]
             + final["government_interest_paid"]
-            - final["government_tax_revenue"],
+            + final["pension_spending"]
+            - final["government_tax_revenue"]
+            - final["pension_contributions"],
             places=4,
         )
 
