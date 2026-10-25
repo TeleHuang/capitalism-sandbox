@@ -329,6 +329,8 @@ class Market:
         if isinstance(agent, (Worker, Capitalist)):
             if good == Good.FOOD:
                 agent.food += quantity
+            elif good == Good.MEAT:
+                agent.meat += quantity
             elif good == Good.CLOTH:
                 agent.cloth += quantity
             elif good == Good.BUILDING:

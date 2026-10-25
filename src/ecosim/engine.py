@@ -77,6 +77,17 @@ from .decisions import (
     wants_fertilizer,
     wage_floor,
 )
+from .demand import (
+    BUNDLE,
+    DEFAULT_DEMAND,
+    DemandConfig,
+    capitalist_consumption_budget,
+    consumption_budget,
+    consumer_price_index,
+    demand_shares,
+    demand_targets,
+    real_wage_proxy,
+)
 from .enums import GOOD_LABELS, Good, Industry
 from .government import Government, MoneyRegime, PolicyRegime
 from .land import run_land_market
@@ -131,8 +142,10 @@ class Engine:
         # "free" = V0.6 成本加成 + 需求/供给 + 成交价锚定；无成本带，
         #          只有绝对安全轨 [PRICE_FLOOR, 20×初始价]。
         self.price_regime: str = "band"
-        # "fixed" = 固定温饱篮子；"les" = Stone-Geary 需求（价格弹性）。
-        self.demand_regime: str = "fixed"
+        # "geary" = 收入依赖的 Stone-Geary 需求（V0.6 默认）；
+        # "les" = 旧的 Stone-Geary 价格弹性实验；"fixed" = 固定温饱篮子。
+        self.demand_regime: str = "geary"
+        self.demand_config: DemandConfig = DEFAULT_DEMAND
         # 是否启用银行存款中介（Keynesian/MMT 启用；古典默认关闭）。
         self.bank_intermediation: bool = False
 
@@ -1636,6 +1649,10 @@ class Engine:
         # 从毛工资中代扣并记入基金；这里不再从消费后的剩余现金征收。
         # 失业救济（儿童/退休者不进入失业救济）
         avg_wage = self.average_wage()
+        # V0.6：重置上月 UI 收入代理；本月实际领取额在下面写回。
+        for worker in self.workers.values():
+            if worker.alive:
+                worker.last_ui_income = 0.0
         for worker in self.workers.values():
             if not worker.alive:
                 continue
@@ -1657,6 +1674,7 @@ class Engine:
                 gov.cash -= paid
                 worker.cash += paid
                 gov.transfers += paid
+                worker.last_ui_income = paid
             worker.ui_months += 1
         # 养老金发放：替代率 × 社会平均工资；基金不足时显式融资/按比例发放。
         if gov.pension_replacement > 0:
@@ -2028,6 +2046,115 @@ class Engine:
             if quantity > 1e-9:
                 self.market.submit_buy(worker, Good.SERVICE, quantity, bid)
 
+    def _household_stock(self, agent) -> Dict[Good, float]:
+        """家庭当前持有的消费品库存（工人与资本家共用）。"""
+        return {
+            Good.FOOD: agent.food,
+            Good.MEAT: agent.meat,
+            Good.CLOTH: agent.cloth,
+            Good.BUILDING: agent.housing,
+            Good.SERVICE: agent.service,
+        }
+
+    def _submit_bundle_orders(
+        self,
+        agent,
+        targets: Dict[Good, float],
+        prices: Dict[Good, float],
+        scale: float = 1.0,
+    ) -> None:
+        """按需求目标挂买单。
+
+        出价顺序同时也是现金竞争顺序：口粮（1.05–1.08）> 衣物/住房
+        （1.04）> 肉类（1.03）> 服务（1.02）。服务排最后，避免在贫困
+        家庭挤占温饱预算；高收入家庭预算充足时服务仍能全额成交。
+        """
+        stock = self._household_stock(agent)
+        cash_left = max(0.0, getattr(agent, "cash", 0.0))
+        for good in (
+            Good.FOOD,
+            Good.CLOTH,
+            Good.BUILDING,
+            Good.MEAT,
+            Good.SERVICE,
+        ):
+            need = max(0.0, targets.get(good, 0.0) - stock.get(good, 0.0))
+            if good != Good.FOOD:
+                need *= max(0.0, scale)
+            if need <= 1e-9 or cash_left <= 1e-9:
+                continue
+            if good == Good.FOOD:
+                bid_mult = 1.08 if stock[Good.FOOD] < 0.05 else 1.05
+            elif good == Good.MEAT:
+                bid_mult = 1.03
+            elif good == Good.SERVICE:
+                bid_mult = 1.02
+            else:
+                bid_mult = 1.04
+            bid = prices.get(good, 1.0) * bid_mult
+            quantity = min(need, cash_left / max(bid, 1e-9))
+            if quantity <= 1e-9:
+                continue
+            self.market.submit_buy(agent, good, quantity, bid)
+            cash_left -= quantity * bid
+
+    def _worker_income_proxy(self, worker: Worker) -> float:
+        """V0.6 家庭消费预算的收入代理（元/月）。
+
+        工资劳动者用当月工资 × 有效劳动；自耕农/自雇摊主用上月经营
+        所得 payout；退休者用养老金；失业者用上月失业保险金。它只用于
+        需求预算，不改变任何现金转移或会计口径。
+        """
+        income = 0.0
+        if worker.retired:
+            income += max(0.0, worker.pension_income)
+        if worker.is_owner_operator:
+            enterprise = self.enterprises.get(worker.employer_id or "")
+            if enterprise is not None and enterprise.active:
+                income += max(0.0, enterprise.last_operating_payout)
+        elif worker.employed and worker.wage > 0:
+            income += worker.wage * worker.effective_labor
+        elif not worker.employed:
+            income += max(0.0, worker.last_ui_income)
+        return income
+
+    def _submit_geary_worker_orders(
+        self, worker: Worker, prices: Dict[Good, float]
+    ) -> None:
+        """V0.6：收入依赖需求。目标量与消费预算存到 worker 上，
+        供月末 `_consume_and_demographics` 使用同一套目标。"""
+        income = self._worker_income_proxy(worker)
+        budget = consumption_budget(
+            worker.cash, prices, income, self.demand_config
+        )
+        targets = demand_targets(budget, prices, self.demand_config)
+        worker.demand_budget = budget
+        worker.demand_targets = dict(targets)
+        self._submit_bundle_orders(
+            worker,
+            targets,
+            prices,
+            scale=getattr(self, "worker_demand_scale", 1.0),
+        )
+
+    def _submit_geary_capitalist_orders(
+        self, capitalist: Capitalist, prices: Dict[Good, float]
+    ) -> None:
+        """资本家用同一需求体系，但预算被限制在 4 倍生存篮子以内。"""
+        scale = getattr(self, "capitalist_demand_scale", 1.0)
+        budget = capitalist_consumption_budget(
+            capitalist.cash,
+            prices,
+            CAPITALIST_MIN_CONSUMPTION,
+            CAPITALIST_CONSUMPTION_RATE,
+            self.demand_config,
+        )
+        budget = min(max(0.0, capitalist.cash), budget * max(0.0, scale))
+        targets = demand_targets(budget, prices, self.demand_config)
+        capitalist.demand_budget = budget
+        capitalist.demand_targets = dict(targets)
+        self._submit_bundle_orders(capitalist, targets, prices)
+
     def _submit_household_orders(self) -> None:
         prices = self.market.reference_prices
         # 家长先把儿童预算以现金转给儿童；儿童随后独立挂买单。
@@ -2037,6 +2164,9 @@ class Engine:
                 continue
             if worker.is_child:
                 self._submit_child_orders(worker, prices)
+                continue
+            if self.demand_regime == "geary":
+                self._submit_geary_worker_orders(worker, prices)
                 continue
             if self.demand_regime == "les":
                 self._submit_les_worker_orders(worker, prices)
@@ -2100,6 +2230,9 @@ class Engine:
                     self.market.submit_buy(worker, Good.SERVICE, qty, bid)
 
         for capitalist in self.capitalists.values():
+            if self.demand_regime == "geary":
+                self._submit_geary_capitalist_orders(capitalist, prices)
+                continue
             budget = max(
                 CAPITALIST_MIN_CONSUMPTION,
                 capitalist.cash * CAPITALIST_CONSUMPTION_RATE,
@@ -2727,19 +2860,47 @@ class Engine:
 
     def _consume_and_demographics(self) -> None:
         demo = self.demographics
+        prices = self.market.reference_prices
         for worker in self.workers.values():
             if not worker.alive:
                 continue
             if worker.is_child:
                 food_target = demo.child_food
+                meat_target = 0.0
                 cloth_target = demo.child_cloth
                 housing_target = demo.child_housing
                 service_target = 0.0
                 hunger_target = demo.child_food
+            elif self.demand_regime == "geary":
+                targets = worker.demand_targets
+                if not targets:
+                    # 直接调用/新成年人：按当前现金与收入代理补算一次目标。
+                    budget = consumption_budget(
+                        worker.cash,
+                        prices,
+                        self._worker_income_proxy(worker),
+                        self.demand_config,
+                    )
+                    targets = demand_targets(
+                        budget, prices, self.demand_config
+                    )
+                    worker.demand_budget = budget
+                    worker.demand_targets = dict(targets)
+                food_target = targets.get(Good.FOOD, FOOD_PER_WORKER)
+                meat_target = targets.get(Good.MEAT, 0.0)
+                cloth_target = targets.get(Good.CLOTH, CLOTH_PER_WORKER)
+                housing_target = targets.get(
+                    Good.BUILDING, HOUSING_PER_WORKER
+                )
+                service_target = targets.get(
+                    Good.SERVICE, SERVICE_PER_HOUSEHOLD
+                )
+                hunger_target = FOOD_PER_WORKER
             else:
                 comfort = worker.living_standard in ("comfort", "leisure")
                 mult = COMFORT_MULTIPLIER if comfort else 1.0
                 food_target = FOOD_PER_WORKER * mult
+                meat_target = 0.0
                 cloth_target = CLOTH_PER_WORKER * mult
                 housing_target = HOUSING_PER_WORKER * mult
                 service_target = SERVICE_PER_HOUSEHOLD * mult
@@ -2747,6 +2908,8 @@ class Engine:
 
             worker.consumed_food = min(worker.food, food_target)
             worker.food -= worker.consumed_food
+            worker.consumed_meat = min(worker.meat, meat_target)
+            worker.meat -= worker.consumed_meat
             worker.consumed_cloth = min(worker.cloth, cloth_target)
             worker.cloth -= worker.consumed_cloth
             worker.consumed_housing = min(worker.housing, housing_target)
@@ -2803,14 +2966,47 @@ class Engine:
                 worker.living_standard = "subsistence"
 
         for capitalist in self.capitalists.values():
-            capitalist.consumed_food = min(capitalist.food, CAPITALIST_FOOD)
+            if self.demand_regime == "geary":
+                targets = capitalist.demand_targets
+                if not targets:
+                    budget = capitalist_consumption_budget(
+                        capitalist.cash,
+                        prices,
+                        CAPITALIST_MIN_CONSUMPTION,
+                        CAPITALIST_CONSUMPTION_RATE,
+                        self.demand_config,
+                    )
+                    targets = demand_targets(
+                        budget, prices, self.demand_config
+                    )
+                    capitalist.demand_budget = budget
+                    capitalist.demand_targets = dict(targets)
+                food_target = targets.get(Good.FOOD, CAPITALIST_FOOD)
+                meat_target = targets.get(Good.MEAT, 0.0)
+                cloth_target = targets.get(Good.CLOTH, CAPITALIST_CLOTH)
+                housing_target = targets.get(
+                    Good.BUILDING, CAPITALIST_HOUSING
+                )
+                service_target = targets.get(
+                    Good.SERVICE, CAPITALIST_SERVICE
+                )
+            else:
+                food_target = CAPITALIST_FOOD
+                meat_target = 0.0
+                cloth_target = CAPITALIST_CLOTH
+                housing_target = CAPITALIST_HOUSING
+                service_target = CAPITALIST_SERVICE
+
+            capitalist.consumed_food = min(capitalist.food, food_target)
             capitalist.food -= capitalist.consumed_food
-            capitalist.consumed_cloth = min(capitalist.cloth, CAPITALIST_CLOTH)
+            capitalist.consumed_meat = min(capitalist.meat, meat_target)
+            capitalist.meat -= capitalist.consumed_meat
+            capitalist.consumed_cloth = min(capitalist.cloth, cloth_target)
             capitalist.cloth -= capitalist.consumed_cloth
-            capitalist.consumed_housing = min(capitalist.housing, CAPITALIST_HOUSING)
+            capitalist.consumed_housing = min(capitalist.housing, housing_target)
             capitalist.housing -= capitalist.consumed_housing
             capitalist.consumed_service = min(
-                capitalist.service, CAPITALIST_SERVICE
+                capitalist.service, service_target
             )
             capitalist.service -= capitalist.consumed_service
 
@@ -3022,6 +3218,72 @@ class Engine:
         }
         for worker in alive_workers:
             living[worker.living_standard] = living.get(worker.living_standard, 0) + 1
+
+        # --- V0.6 家庭需求 / 消费结构 ---------------------------------
+        # 用实际消费量（按参考价估值）计算预算份额。儿童消费计入家庭，
+        # 因此口粮占比会略高于纯成人口径；另给出成人食品占比。
+        demand_cfg = self.demand_config
+        consumption_qty = {good: 0.0 for good in BUNDLE}
+        adult_qty = {good: 0.0 for good in BUNDLE}
+        target_sum = {good: 0.0 for good in BUNDLE}
+        target_count = 0
+        demand_budget_sum = 0.0
+        for worker in alive_workers:
+            quantities = {
+                Good.FOOD: worker.consumed_food,
+                Good.MEAT: worker.consumed_meat,
+                Good.CLOTH: worker.consumed_cloth,
+                Good.BUILDING: worker.consumed_housing,
+                Good.SERVICE: worker.consumed_service,
+            }
+            for good, quantity in quantities.items():
+                consumption_qty[good] += quantity
+            if worker.is_child:
+                continue
+            for good, quantity in quantities.items():
+                adult_qty[good] += quantity
+            targets = worker.demand_targets
+            if targets:
+                target_count += 1
+                demand_budget_sum += worker.demand_budget
+                for good in BUNDLE:
+                    target_sum[good] += targets.get(good, 0.0)
+        budget_shares = demand_shares(consumption_qty, prices)
+        adult_budget_shares = demand_shares(adult_qty, prices)
+        # 资本家消费也计入“全社会消费份额”，否则肉类需求在统计里
+        # 会显示为 0（当前低实际工资下肉类主要由高收入资本家购买）。
+        capitalist_qty = {good: 0.0 for good in BUNDLE}
+        for capitalist in self.capitalists.values():
+            capitalist_qty[Good.FOOD] += capitalist.consumed_food
+            capitalist_qty[Good.MEAT] += capitalist.consumed_meat
+            capitalist_qty[Good.CLOTH] += capitalist.consumed_cloth
+            capitalist_qty[Good.BUILDING] += capitalist.consumed_housing
+            capitalist_qty[Good.SERVICE] += capitalist.consumed_service
+        total_qty = {
+            good: consumption_qty[good] + capitalist_qty[good]
+            for good in BUNDLE
+        }
+        market_budget_shares = demand_shares(total_qty, prices)
+        average_targets = {
+            good.value: (
+                target_sum[good] / target_count if target_count else 0.0
+            )
+            for good in BUNDLE
+        }
+        household_consumption_value = sum(
+            consumption_qty[good] * prices.get(good, 0.0) for good in BUNDLE
+        )
+        total_consumption_value = sum(
+            total_qty[good] * prices.get(good, 0.0) for good in BUNDLE
+        )
+        # 就业口径必须只含真正在业者；workers_by_industry 按“最后行业”
+        # 统计，失业者会残留旧行业标签，不能直接当就业份额。
+        service_employed = sum(
+            1 for worker in employed if worker.industry == Industry.SERVICE
+        )
+        livestock_employed = sum(
+            1 for worker in employed if worker.industry == Industry.LIVESTOCK
+        )
 
         capitalist_farms = [
             e
@@ -3307,6 +3569,44 @@ class Engine:
             "firms": firms_by_industry,
             "workers_by_industry": workers_by_industry,
             "living_standard": living,
+            # V0.6 需求侧指标：食品占比（Engel）、服务质量升级、
+            # 实际工资代理与服务就业占比。
+            "budget_shares": budget_shares,
+            "adult_budget_shares": adult_budget_shares,
+            "food_share": budget_shares["food"],
+            "food_total_share": budget_shares["food_total"],
+            "adult_food_share": adult_budget_shares["food"],
+            "meat_share": budget_shares["meat"],
+            "cloth_share": budget_shares["cloth"],
+            "housing_share": budget_shares["housing"],
+            "service_spending_share": budget_shares["service"],
+            "household_consumption_value": household_consumption_value,
+            # 含资本家消费的全社会口径（肉类需求在这里可见）。
+            "market_budget_shares": market_budget_shares,
+            "market_food_share": market_budget_shares["food"],
+            "market_food_total_share": market_budget_shares["food_total"],
+            "market_meat_share": market_budget_shares["meat"],
+            "market_service_spending_share": market_budget_shares["service"],
+            "market_consumption_value": total_consumption_value,
+            "capitalist_meat_consumed": capitalist_qty[Good.MEAT],
+            "demand_targets": average_targets,
+            "demand_budget": (
+                demand_budget_sum / target_count if target_count else 0.0
+            ),
+            "real_wage_proxy": real_wage_proxy(
+                self.average_wage(), prices, demand_cfg
+            ),
+            "consumer_price_index": consumer_price_index(
+                prices, INITIAL_PRICES, demand_cfg
+            ),
+            "service_employment_share": service_employed / max(
+                len(employed), 1
+            ),
+            "livestock_employment_share": livestock_employed / max(
+                len(employed), 1
+            ),
+            "service_employed": service_employed,
+            "livestock_employed": livestock_employed,
             "capitalist_farms": len(capitalist_farms),
             "household_farms": len(household_farms),
             "fertilizer_used": fertilizer_used,

@@ -27,9 +27,10 @@ class ServiceSectorTests(unittest.TestCase):
         cls.engine = run(60)
         cls.final = cls.engine.stats[-1]
 
-    def test_dynamic_stat_keys_include_the_tenth_industry(self):
-        self.assertEqual(len(Industry), 10)
-        self.assertEqual(len(Good), 10)
+    def test_dynamic_stat_keys_include_new_industries(self):
+        # V0.6 新增畜牧业（第 11 个行业）和肉类（第 11 种商品）。
+        self.assertEqual(len(Industry), 11)
+        self.assertEqual(len(Good), 11)
         for section in (
             "firms",
             "workers_by_industry",
@@ -41,6 +42,17 @@ class ServiceSectorTests(unittest.TestCase):
             "zero_output_streak",
         ):
             self.assertIn("service", self.final[section])
+        for section in ("firms", "workers_by_industry"):
+            self.assertIn("livestock", self.final[section])
+        for section in (
+            "production",
+            "prices",
+            "volumes",
+            "demand",
+            "supply",
+            "zero_output_streak",
+        ):
+            self.assertIn("meat", self.final[section])
 
     def test_service_self_employment_absorbs_unemployed_workers(self):
         # 无服务业时 60 月古典失业率约 34%（见本次改动前的基线）。

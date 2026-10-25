@@ -25,6 +25,8 @@ class Worker:
     cloth: float = 1.0
     housing: float = 0.2
     service: float = 0.0
+    # V0.6 食品质量阶梯：肉类库存与上月实际消费。
+    meat: float = 0.0
     employer_id: Optional[str] = None
     wage: float = 0.0
     hours: int = 16
@@ -36,6 +38,8 @@ class Worker:
     alive: bool = True
     hunger_months: int = 0
     ui_months: int = 0
+    # 上月领取的失业保险金（V0.6 需求预算的收入代理）。
+    last_ui_income: float = 0.0
     is_owner_operator: bool = False
     land_owned: float = 0.0
 
@@ -56,7 +60,11 @@ class Worker:
     consumed_cloth: float = 0.0
     consumed_housing: float = 0.0
     consumed_service: float = 0.0
+    consumed_meat: float = 0.0
     living_standard: str = "survival"
+    # 本月需求目标与可支配消费预算（V0.6 收入依赖需求）。
+    demand_targets: Dict[Good, float] = field(default_factory=dict)
+    demand_budget: float = 0.0
 
     @property
     def effective_labor(self) -> float:
@@ -217,10 +225,14 @@ class Capitalist:
     cloth: float = 1.5
     housing: float = 0.3
     service: float = 0.0
+    meat: float = 0.0
     consumed_food: float = 0.0
     consumed_cloth: float = 0.0
     consumed_housing: float = 0.0
     consumed_service: float = 0.0
+    consumed_meat: float = 0.0
+    demand_targets: Dict[Good, float] = field(default_factory=dict)
+    demand_budget: float = 0.0
 
     def owned_count(self, enterprises: Dict[str, Enterprise]) -> int:
         return sum(1 for e in enterprises.values() if e.owner_id == self.id and e.active)

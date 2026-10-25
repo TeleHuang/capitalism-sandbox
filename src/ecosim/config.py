@@ -18,6 +18,9 @@ from .enums import Good, Industry
 
 INITIAL_PRICES: Dict[Good, float] = {
     Good.FOOD: 100.0,
+    # 肉类是质量升级品：3 吨饲料粮 + 劳动/畜舍才能产出 1 吨肉，
+    # 初始价格约等于“饲料成本 + 工资”，并显著高于口粮。
+    Good.MEAT: 400.0,
     Good.COAL: 20.0,
     Good.IRON_ORE: 30.0,
     Good.STEEL: 150.0,
@@ -28,6 +31,10 @@ INITIAL_PRICES: Dict[Good, float] = {
     Good.BUILDING: 10.0,
     Good.SERVICE: 10.0,
 }
+
+# 畜牧业：每吨肉类消耗的饲料粮（吨）。2–3 吨是历史粗略区间；
+# 取 3.0 使肉类保持明显的质量溢价，同时让饲料需求与口粮竞争。
+LIVESTOCK_FEED_PER_MEAT = 3.0
 
 # 月度温饱篮子（PRD 2.2.1）。
 FOOD_PER_WORKER = 0.10          # 吨 / 月
@@ -313,6 +320,9 @@ for prefix, industry, label, capacity, workers, good, t0, upgrade, build in [
     # 反应炉建设期 1 个月：2 个月会让化肥厂错过第一批资本主义农场
     # 的采用窗口，造成“农场想买、工厂还在建”的额外停摆。
     ("fertilizer", Industry.FERTILIZER_FACTORY, "反应炉", 20.0, 5, Good.MACHINERY, 1.0, 2.0, 1),
+    # 畜牧业：t0 是小型畜舍（1 台机械 + 2 个月建设），产能 2 吨肉/月，
+    # 需要 5 名工人。规模翻倍时产能翻倍、工人 +1，和 2^N 设备表一致。
+    ("livestock", Industry.LIVESTOCK, "畜舍", 2.0, 5, Good.MACHINERY, 1.0, 2.0, 2),
 ]:
     EQUIPMENT.update(
         _make_equipment_tiers(
@@ -440,12 +450,22 @@ SECTOR_PARAMS: Dict[Industry, SectorParams] = {
         equipment=tuple(f"fertilizer_t{n}" for n in range(8)),
         max_firms=3,
     ),
+    Industry.LIVESTOCK: SectorParams(
+        industry=Industry.LIVESTOCK,
+        output=Good.MEAT,
+        inputs={Good.FOOD: LIVESTOCK_FEED_PER_MEAT},
+        equipment=tuple(f"livestock_t{n}" for n in range(8)),
+        max_firms=12,
+    ),
     Industry.SERVICE: SectorParams(
         industry=Industry.SERVICE,
         output=Good.SERVICE,
         inputs={},
         equipment=("service_t0",),
-        max_firms=600,
+        # V0.6 服务需求随收入上升，且工业裁员时需要更大的非正规部门
+        # 吸收劳动力；上限从 600 提高到 1000（仍需有未成交需求才进入，
+        # 不会凭空制造岗位）。
+        max_firms=1000,
     ),
 }
 

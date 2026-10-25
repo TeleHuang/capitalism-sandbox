@@ -23,8 +23,9 @@ SLOW_ENABLED = os.environ.get("ECOSIM_SLOW_TESTS", "").strip().lower() in {
     "yes",
     "on",
 }
-# 兼容工资—价格分支使用的命名。
+# 兼容不同分支使用的命名。
 SLOW_TESTS_ENABLED = SLOW_ENABLED
+SLOW_TESTS = SLOW_ENABLED
 
 slow = unittest.skipUnless(
     SLOW_ENABLED,

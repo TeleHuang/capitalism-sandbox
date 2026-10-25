@@ -213,11 +213,25 @@ class InvariantTests(unittest.TestCase):
             )
 
     def test_bank_loans_equal_enterprise_debt(self):
-        # 古典 60 月内可能还没有企业债务（0=0 仍应成立）；Keynesian
-        # 有银行中介，必须出现正债务才能证明测试不是空转。
-        self.assertTrue(
-            self.runs["keynesian"].saw_positive_debt,
-            msg="keynesian 60 月内没有出现企业债务，测试不具区分度",
+        # 用一笔确定性的新贷款验证恒等式不是空转；不要依赖某个剧本
+        # 60 月内恰好出现正债务（需求/工资机制变化会让它变成 0）。
+        engine = Engine(seed=1)
+        build_scenario_1(engine, config=KEYNESIAN_WELFARE)
+        enterprise = next(
+            ent for ent in engine.active_enterprises() if ent.cash >= 0
+        )
+        loaned = engine.bank.lend(enterprise, 100.0)
+        self.assertGreater(loaned, 0.0)
+        self.assertAlmostEqual(
+            engine.bank.loans.get(enterprise.id, 0.0),
+            enterprise.debt,
+            places=6,
+        )
+        engine.bank.charge_interest(enterprise)
+        self.assertAlmostEqual(
+            engine.bank.loans.get(enterprise.id, 0.0),
+            enterprise.debt,
+            places=6,
         )
         for regime, run in self.runs.items():
             self.assertEqual(

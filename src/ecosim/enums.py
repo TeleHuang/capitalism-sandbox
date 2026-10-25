@@ -5,6 +5,8 @@ from enum import Enum
 
 class Good(str, Enum):
     FOOD = "food"
+    # V0.6 食品质量阶梯：肉类由饲料粮转化，收入越高需求越大。
+    MEAT = "meat"
     COAL = "coal"
     IRON_ORE = "iron_ore"
     STEEL = "steel"
@@ -18,6 +20,8 @@ class Good(str, Enum):
 
 class Industry(str, Enum):
     AGRICULTURE = "agriculture"
+    # V0.6 畜牧业：投入饲料粮，产出肉类（食品质量升级）。
+    LIVESTOCK = "livestock"
     COAL_MINE = "coal_mine"
     IRON_MINE = "iron_mine"
     STEEL_MILL = "steel_mill"
@@ -30,12 +34,13 @@ class Industry(str, Enum):
 
 
 CONSUMER_GOODS = frozenset(
-    {Good.FOOD, Good.CLOTH, Good.BUILDING, Good.SERVICE}
+    {Good.FOOD, Good.MEAT, Good.CLOTH, Good.BUILDING, Good.SERVICE}
 )
 CAPITAL_GOODS = frozenset({Good.MACHINERY, Good.BRICK, Good.STEEL})
 
 GOOD_LABELS = {
     Good.FOOD: "粮食",
+    Good.MEAT: "肉类",
     Good.COAL: "煤炭",
     Good.IRON_ORE: "铁矿石",
     Good.STEEL: "钢铁",

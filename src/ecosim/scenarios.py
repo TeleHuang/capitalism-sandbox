@@ -30,7 +30,9 @@ class ScenarioConfig:
     policy_regime: PolicyRegime = PolicyRegime.CLASSICAL
     money_regime: MoneyRegime = MoneyRegime.GOLD
     price_regime: str = "band"
-    demand_regime: str = "fixed"
+    # V0.6：默认使用收入依赖的 Stone-Geary 需求；"fixed"/"les" 保留为
+    # 历史对照实验。
+    demand_regime: str = "geary"
     bank_intermediation: bool = False
     tax_rate_wage: float = 0.0
     tax_rate_profit: float = 0.0
