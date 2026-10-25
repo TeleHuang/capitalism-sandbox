@@ -33,6 +33,7 @@
 | `727c388` | V0.6 B：工资—生产率规则、8h/16h、free 成本加成价格（cherry-pick 自 `feature/v06-wage-price` `9fbcb4d`） |
 | `8a9fdd7` | V0.6 A：收入依赖需求、肉类质量阶梯、服务吸收劳动（cherry-pick 自 `feature/v06-demand` `1d3bde4`） |
 | `4f15f01` | V0.6 单文件 HTML 发行版：JS 引擎/模块化源码/黄金对比（cherry-pick 自 `feature/html-engine` `0336132`） |
+| `83ba3e1` | 发行版六边形城市地图（中心 + 六行业地块，绑定真实统计/工厂面板） |
 
 ## Feature 分支
 

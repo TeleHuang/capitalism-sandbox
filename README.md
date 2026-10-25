@@ -116,7 +116,8 @@ web/release/ecosim-v06.html
 - 源码模块：`web/release/src/*.js`；构建：
   `node scripts/build_release_v06.mjs`（`--check` 检查无外部资源）。
 - 已实现：V0.4 核心机制、V0.6 收入依赖需求/肉类/服务吸收/工资—生产率/
-  8h/16h/默认 free 价格、V0.5 人口/PAYG 养老金。
+  8h/16h/默认 free 价格、V0.5 人口/PAYG 养老金；玩家 UI 含六边形城市地图
+  （中心 + 六行业地块，点击工厂打开面板）。
 - 未实现（后续 JS 分支）：A2 耐用品/废钢/土地兼并、C 完整信贷/央行反应函数。
 - 黄金对比：`node scripts/test_engine_v06.mjs`（11/11）与
   `node scripts/compare_golden_v06.mjs --months=60|240`。
