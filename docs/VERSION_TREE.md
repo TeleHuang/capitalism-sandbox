@@ -51,6 +51,8 @@
 | `feature/price-guidance` | `7c1d949` | 待合并/待组合测试 | opt-in 供求指导价 v1+v2；纯价格仍崩溃，默认 band |
 | `feature/v06-demand` | `1d3bde4` | 已合并 | 收入依赖需求/肉类/服务吸收（主线 `8a9fdd7`） |
 | `feature/v06-wage-price` | `9fbcb4d` | 已合并 | 工资—生产率/8h/16h/free 价格（主线 `727c388`） |
+| `feature/html-engine` | — | 进行中 | TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
+| `feature/v06-durables` | — | 已取消 | A2 推迟到 JS 发行版之后 |
 
 ## UI 启动
 

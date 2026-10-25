@@ -95,23 +95,24 @@
 应补：可开垦土地池、开垦投资（劳动/设备/时间、边际成本递增）、
 estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md`（待建）。
 
-## 下一步优先级（V0.6）
+## 下一步优先级（JS/TS 单一源）
 
-1. **A2 耐用品/生命周期（最高优先）**：衣服 60 月、住房 600 月（维修/摊销）、
-   农机/车 120 月；汽车/住房存量；报废设备/车 → 废钢（价格锚定铁矿，
-   钢厂用废钢+半量煤炭）；土地兼并/超大型农机，小农机闲置/出售。
-2. **C 银行/信贷/MMT**：贷款创造存款、准备金/资本约束、信用审查/风险溢价、
-   央行通胀/利率反应函数；金本位准备金率扩张信用。
-3. **D 土地开垦/estate**：开局缓慢开垦（不用粮价 180 阈值）；合并
-   `feature/land-reclamation`，estate 拍卖/再分配。
-4. **E 单文件 HTML 发行版**：玩家机制 UI（产品图标、工厂面板、2^N、
-   矿类/土地/消费/人口说明），全部逻辑/资源内联；当前 `web/v04` 只是诊断版。
+1. **E/F JS/TS 模块化引擎 + 单文件 HTML 发行版（最高优先）**：
+   `feature/html-engine`，模块化 ES modules/TS + Node 测试 + 单文件构建；
+   先交付核心 V0.6 可玩版（V0.4 机制 + 需求/工资/free + 服务/肉类 +
+   人口/养老金尽量），Python 只做黄金 oracle。
+2. **A2 耐用品/生命周期（推迟到发行版之后）**：衣服 60 月、住房 600 月、
+   农机/车 120 月、废钢/钢厂回购、汽车/住房存量、土地兼并/超大型农机；
+   直接在 JS/TS 基础做。Python A2 分支取消/不合并。
+3. **C 银行/信贷/MMT（JS）**：贷款创造存款、准备金/资本约束、信用审查、
+   央行通胀/利率反应函数。
+4. **D 土地开垦/estate（JS）**：开局缓慢开垦、estate 拍卖/再分配。
 5. **`price_regime="free"` 已是默认**：无成本价格带；A2/C 后继续压
-   classical 失业/价格方向。`band` 只作旧制度对照。
+   classical 失业/价格方向；band 只作旧制度对照。
 6. **D3 剧本/长程**：`IRON_AGE`、`NEOLIBERAL`；20–100 seeds、
    1200 月、长期负利润与剩余古典饥荒。
 7. **D4 信贷冲击稳定器**：`docs/CREDIT_BACKSTOP_DESIGN.md` 的
-   wage_arrears/LLR/食品券/冻结规则校准，与 C 一起做。
+   wage_arrears/LLR/食品券/冻结规则，与 C 一起做。
 
 ## 并行版本树（进行中）
 
@@ -127,6 +128,8 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 | `feature/ui-icons` | `.claude/worktrees/ui-icons` | **已合并** `ca5ebeb`：产品图标、工厂面板、机制说明（V0.6 UI） |
 | `feature/v06-demand` | `.claude/worktrees/v06-demand` | **已合并** `8a9fdd7`：收入依赖需求、肉类/服务吸收 |
 | `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **已合并** `727c388`：生产率工资、8h/16h、free 价格制度 |
+| `feature/html-engine` | `.claude/worktrees/html-engine` | **进行中**：TS/JS 单一逻辑源 + 单文件 HTML 发行版 |
+| `feature/v06-durables` | `.claude/worktrees/v06-durables` | **已取消**：A2 推迟到 JS 发行版之后 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |
 | `feature/services` | `.claude/worktrees/services` | 已合并 `79d27de` |
