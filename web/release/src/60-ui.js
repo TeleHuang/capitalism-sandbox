@@ -832,6 +832,7 @@ function renderAll() {
   stopPlaybackIfAtEnd();
   renderKpis(stat);
   if (state.view === "overview") renderOverview(stat);
+  else if (state.view === "map") renderMap(stat);
   else if (state.view === "markets") renderMarkets(stat);
   else if (state.view === "factories") renderFactories(stat);
   else if (state.view === "mechanism") renderMechanism(stat);
@@ -998,6 +999,123 @@ function renderMarkets(stat) {
   });
   $("goods-table").innerHTML = table(headers, rows) +
     `<p class="table-foot">${stat.price_regime === "free" ? "free 制度不向界面暴露成本地板/天花板；参考价由成本加成、成交锚与短缺/过剩调整。只保留内部绝对安全轨。" : "当前为旧价格制度，显示成本带上下轨。"}</p>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* hex city map                                                        */
+/* ------------------------------------------------------------------ */
+const HEX_R = 155;
+const HEX_CX = 600;
+const HEX_CY = 465;
+const HEX_TILES = [
+  { id: "city", label: "城市", terrain: "city", cx: HEX_CX, cy: HEX_CY, industries: ["textile_mill", "construction"] },
+  { id: "machinery", label: "机械", terrain: "plain", cx: HEX_CX - 0.866 * HEX_R, cy: HEX_CY - 1.5 * HEX_R, industries: ["machinery_factory"] },
+  { id: "steel", label: "钢铁", terrain: "plain", cx: HEX_CX + 0.866 * HEX_R, cy: HEX_CY - 1.5 * HEX_R, industries: ["steel_mill"] },
+  { id: "agriculture", label: "农业", terrain: "farm", cx: HEX_CX - 1.732 * HEX_R, cy: HEX_CY, industries: ["agriculture"] },
+  { id: "mine", label: "矿场", terrain: "mine", cx: HEX_CX + 1.732 * HEX_R, cy: HEX_CY, industries: ["coal_mine", "iron_mine"] },
+  { id: "fertilizer", label: "化肥", terrain: "plain", cx: HEX_CX - 0.866 * HEX_R, cy: HEX_CY + 1.5 * HEX_R, industries: ["fertilizer_factory"] },
+  { id: "brick", label: "砖厂", terrain: "plain", cx: HEX_CX + 0.866 * HEX_R, cy: HEX_CY + 1.5 * HEX_R, industries: ["brick_factory"] },
+];
+
+function hexPoints(cx, cy, r) {
+  const points = [];
+  for (let i = 0; i < 6; i += 1) {
+    const angle = (Math.PI / 3) * i + Math.PI / 6;
+    points.push(`${(cx + r * Math.cos(angle)).toFixed(2)},${(cy + r * Math.sin(angle)).toFixed(2)}`);
+  }
+  return points.join(" ");
+}
+
+function mapTree(x, y, scale) {
+  const s = scale === undefined ? 1 : scale;
+  return `<g transform="translate(${x} ${y}) scale(${s})">` +
+    `<rect x="-2" y="0" width="4" height="14" fill="#6b4f32"/>` +
+    `<circle cx="0" cy="-5" r="11" fill="#4f8a4b" opacity="0.85"/>` +
+    `<circle cx="-7" cy="1" r="8" fill="#5e9c56" opacity="0.8"/>` +
+    `<circle cx="7" cy="1" r="8" fill="#477f45" opacity="0.8"/></g>`;
+}
+
+function mapTerrain(tile) {
+  const { cx, cy } = tile;
+  if (tile.terrain === "farm") {
+    return `<path d="M ${cx - 128} ${cy + 34} C ${cx - 40} ${cy + 10}, ${cx + 30} ${cy + 58}, ${cx + 120} ${cy + 30}" fill="none" stroke="#5b9bd5" stroke-width="7" opacity="0.55"/>` +
+      `<path d="M ${cx - 100} ${cy - 18} L ${cx + 84} ${cy - 40} M ${cx - 96} ${cy - 4} L ${cx + 90} ${cy - 26} M ${cx - 92} ${cy + 10} L ${cx + 96} ${cy - 12}" stroke="#7ba65b" stroke-width="3" opacity="0.7"/>` +
+      mapTree(cx - 105, cy + 30, 1.0) + mapTree(cx + 95, cy - 35, 0.9) + mapTree(cx - 70, cy - 48, 0.75);
+  }
+  if (tile.terrain === "mine") {
+    return `<path d="M ${cx - 92} ${cy + 28} L ${cx - 30} ${cy - 62} L ${cx + 28} ${cy + 28} Z" fill="#8e8b84" stroke="#6e6b64" stroke-width="2"/>` +
+      `<path d="M ${cx - 10} ${cy + 28} L ${cx + 55} ${cy - 48} L ${cx + 108} ${cy + 28} Z" fill="#a29e95" stroke="#6e6b64" stroke-width="2"/>` +
+      `<path d="M ${cx - 30} ${cy - 62} L ${cx - 18} ${cy - 39} L ${cx - 40} ${cy - 36} Z" fill="#e7e3d8" opacity="0.85"/>` +
+      `<path d="M ${cx + 55} ${cy - 48} L ${cx + 67} ${cy - 25} L ${cx + 45} ${cy - 22} Z" fill="#e7e3d8" opacity="0.85"/>`;
+  }
+  if (tile.terrain === "city") {
+    return `<g opacity="0.9">` +
+      `<rect x="${cx - 104}" y="${cy - 52}" width="42" height="76" rx="3" fill="#b98d5e" stroke="#7e5c39" stroke-width="2"/>` +
+      `<rect x="${cx - 50}" y="${cy - 76}" width="50" height="100" rx="3" fill="#c9a271" stroke="#7e5c39" stroke-width="2"/>` +
+      `<rect x="${cx + 12}" y="${cy - 40}" width="38" height="64" rx="3" fill="#a77c51" stroke="#7e5c39" stroke-width="2"/>` +
+      `<rect x="${cx + 58}" y="${cy - 60}" width="44" height="84" rx="3" fill="#c39a68" stroke="#7e5c39" stroke-width="2"/>` +
+      `<path d="M ${cx - 90} ${cy - 32} h 14 M ${cx - 90} ${cy - 18} h 14 M ${cx - 34} ${cy - 55} h 18 M ${cx - 34} ${cy - 39} h 18 M ${cx + 28} ${cy - 22} h 12 M ${cx + 74} ${cy - 40} h 14 M ${cx + 74} ${cy - 24} h 14" stroke="#f5e6bf" stroke-width="3" opacity="0.8"/></g>`;
+  }
+  return mapTree(cx - 92, cy + 22, 1.0) + mapTree(cx + 88, cy - 30, 0.85) + mapTree(cx - 35, cy - 58, 0.7);
+}
+
+function mapFirm(stat, industry, x, y) {
+  const params = SECTOR_PARAMS.get(industry);
+  if (!params) return "";
+  const output = params.output;
+  const firms = num((stat.firms || {})[industry]);
+  const workers = num((stat.industry_employed || {})[industry]);
+  const production = num((stat.production || {})[output]);
+  const equipment = num((stat.industry_equipment_units || {})[industry]);
+  const projects = num((stat.active_projects || {})[industry]);
+  const unit = GOOD_UNITS[output] || "单位";
+  // goodIcon 返回的是 <svg viewBox>，嵌进外层 SVG 时必须显式给宽高，
+  // 否则浏览器会按默认 300×150 渲染，整个地图会被图标盖住。
+  const icon = goodIcon(output, "map-icon").replace(
+    "<svg ", '<svg width="32" height="32" '
+  );
+  return `<g class="map-firm" data-industry="${escapeHtml(industry)}" tabindex="0" role="button" aria-label="打开 ${escapeHtml(INDUSTRY_LABELS[industry])} 工厂面板">` +
+    `<rect class="map-firm-bg" x="${x - 108}" y="${y - 31}" width="216" height="62" rx="10"/>` +
+    `<g transform="translate(${x - 96} ${y - 20})">${icon}</g>` +
+    `<text class="map-firm-title" x="${x - 64}" y="${y - 10}">${escapeHtml(INDUSTRY_LABELS[industry])} ×${fmtInt(firms)}</text>` +
+    `<text class="map-firm-sub" x="${x - 64}" y="${y + 8}">${fmtInt(workers)} 人 · ${fmtNum(production, 1)} ${escapeHtml(unit)}/月</text>` +
+    `<text class="map-firm-sub" x="${x - 64}" y="${y + 24}">设备 ${fmtInt(equipment)} · 项目 ${fmtInt(projects)}</text></g>`;
+}
+
+function renderMap(stat) {
+  const host = $("hex-map");
+  if (!host) return;
+  const tiles = HEX_TILES.map((tile) => {
+    const single = tile.industries.length === 1 ? tile.industries[0] : "";
+    const tileAttr = single ? ` data-industry="${escapeHtml(single)}" tabindex="0" role="button" aria-label="打开 ${escapeHtml(INDUSTRY_LABELS[single])} 工厂面板"` : "";
+    const firms = tile.industries.map((industry, index) => {
+      const y = tile.industries.length > 1
+        ? tile.cy + (index === 0 ? -38 : 42)
+        : tile.cy + 12;
+      return mapFirm(stat, industry, tile.cx, y);
+    }).join("");
+    return `<g class="map-tile"${tileAttr}>` +
+      `<polygon class="map-hex" points="${hexPoints(tile.cx, tile.cy, HEX_R)}" fill="${tile.terrain === "mine" ? "#b8b2a6" : tile.terrain === "city" ? "#d8c7a7" : tile.terrain === "farm" ? "#a9c987" : "#b6c9a2"}"/>` +
+      `<polygon points="${hexPoints(tile.cx, tile.cy - 2, HEX_R - 8)}" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2"/>` +
+      mapTerrain(tile) +
+      `<text class="map-tile-label" x="${tile.cx}" y="${tile.cy - HEX_R + 26}" text-anchor="middle">${escapeHtml(tile.label)}</text>` +
+      firms + `</g>`;
+  }).join("");
+  host.innerHTML = `<svg class="hex-map-svg" viewBox="0 0 1200 930" role="img" aria-label="六边形城市地图">${tiles}</svg>`;
+  const totalFirms = INDUSTRIES.reduce((sum, industry) => sum + num((stat.firms || {})[industry]), 0);
+  const totalWorkers = INDUSTRIES.reduce((sum, industry) => sum + num((stat.industry_employed || {})[industry]), 0);
+  const food = num((stat.production || {}).food);
+  const steel = num((stat.production || {}).steel);
+  $("map-facts").innerHTML = factRows([
+    ["月份", `T${state.month} / ${state.months}`],
+    ["企业 / 就业", `${fmtInt(totalFirms)} 家 / ${fmtInt(totalWorkers)} 人`],
+    ["粮食 / 钢铁", `${fmtNum(food, 1)} 吨 / ${fmtNum(steel, 1)} 吨`],
+    ["价格制度", stat.price_regime === "free" ? "自由成本加成（无硬边界）" : "旧价格带"],
+    ["矿类", "1× 徒手采矿 · 2×+ 矿井设备"],
+    ["点击", "工厂图标 → 配方/2^N/生产资料"],
+  ]);
+  const note = $("map-month-note");
+  if (note) note.textContent = `T${state.month} · ${fmtInt(totalFirms)} 家企业`;
 }
 
 function renderFactories(stat) {

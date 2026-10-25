@@ -129,6 +129,7 @@
 
   <nav class="tabs" aria-label="视图切换">
     <button class="tab-btn active" type="button" data-view="overview">总览</button>
+    <button class="tab-btn" type="button" data-view="map">城市地图</button>
     <button class="tab-btn" type="button" data-view="markets">市场</button>
     <button class="tab-btn" type="button" data-view="factories">工厂</button>
     <button class="tab-btn" type="button" data-view="mechanism">机制</button>
@@ -168,6 +169,28 @@
         <article class="panel">
           <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">MONEY &amp; STATE</span><h2>货币、银行与政府</h2><p class="panel-sub">货币总量、银行贷款/存款、政府债务与央行货币</p></div><span class="panel-note">元</span></header>
           <div class="panel-body"><div id="chart-money" class="chart-host"></div><div id="money-facts" class="fact-grid"></div></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- 六边形城市地图 -->
+    <section id="view-map" class="view hidden">
+      <div class="section-heading"><div><span class="kicker">CITY MAP</span><h2>六边形城市地图</h2></div><p class="section-note">中心是城市，六个地块按行业分布；图标数量与产量来自当前月份真实统计 · 点击工厂打开面板</p></div>
+      <article class="panel map-panel">
+        <div class="panel-body"><div id="hex-map" class="hex-map-host"></div></div>
+      </article>
+      <div class="panel-grid" style="margin-top:10px">
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">MAP FACTS</span><h2>地块摘要</h2><p class="panel-sub">当前月份的企业、就业与产量</p></div><span class="panel-note" id="map-month-note">—</span></header>
+          <div class="panel-body"><div id="map-facts" class="fact-grid"></div></div>
+        </article>
+        <article class="panel">
+          <header class="panel-head"><div class="panel-title-wrap"><span class="kicker">MAP LEGEND</span><h2>地图说明</h2><p class="panel-sub">同地块同行业合并显示；矿类 1× 徒手采矿、2×+ 矿井设备</p></div></header>
+          <div class="panel-body"><div class="map-note">
+            <p>中心城市容纳纺织厂与施工队；六个外围地块分别是机械、钢铁、农业、矿场、化肥、砖厂。</p>
+            <p>图标上的 <strong>×N</strong> 是企业数合并；设备台数与产量来自当前月统计。点击任意工厂图标打开配方、2^N 设备阶梯与生产资料来源面板。</p>
+            <p>地图是当前月份的快照；拖动时间轴或播放时，地块上的企业和产量会同步变化。</p>
+          </div></div>
         </article>
       </div>
     </section>

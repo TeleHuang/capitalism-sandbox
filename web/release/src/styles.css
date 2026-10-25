@@ -493,3 +493,38 @@ td .cell-sub { display: block; color: var(--faint); font-size: 9.5px; font-weigh
   .factory-icon { width: 50px; height: 50px; }
   .factory-body { padding: 12px; }
 }
+
+/* ------------------------------------------------------------------ */
+/* hex city map                                                       */
+/* ------------------------------------------------------------------ */
+.map-panel .panel-body { padding: 8px; }
+.hex-map-host { width: 100%; overflow: hidden; border-radius: 14px; background: #0b131a; }
+.hex-map-svg { display: block; width: 100%; height: auto; max-height: 760px; }
+.map-hex { stroke: rgba(255, 255, 255, 0.28); stroke-width: 3; }
+.map-tile[data-industry] { cursor: pointer; }
+.map-tile-label {
+  fill: #243328; font-size: 24px; font-weight: 750;
+  letter-spacing: 0.06em; paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.55); stroke-width: 3px;
+}
+.map-firm { cursor: pointer; outline: none; }
+.map-firm-bg {
+  fill: rgba(10, 18, 24, 0.88);
+  stroke: rgba(255, 255, 255, 0.22); stroke-width: 1.5;
+  transition: fill 120ms ease, stroke 120ms ease;
+}
+.map-firm:hover .map-firm-bg,
+.map-firm:focus-visible .map-firm-bg {
+  fill: rgba(16, 32, 40, 0.97); stroke: var(--series-3); stroke-width: 2.4;
+}
+.map-firm-title { fill: #f0f5f3; font-size: 15px; font-weight: 650; }
+.map-firm-sub { fill: #a7b7b0; font-size: 11px; }
+.map-firm .good-icon { width: 32px; height: 32px; }
+.map-note { color: var(--muted); font-size: 12px; line-height: 1.65; }
+.map-note strong { color: var(--ink); }
+@media (max-width: 760px) {
+  .hex-map-svg { max-height: none; }
+  .map-firm-title { font-size: 17px; }
+  .map-firm-sub { font-size: 13px; }
+  .map-tile-label { font-size: 27px; }
+}
