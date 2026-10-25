@@ -12,8 +12,10 @@
 - 分支：`v0.4-integration`
 - 最新提交：见 `git log -1`（V0.5 人口/退休金 + V0.6 A 需求阶梯 +
   B 工资—生产率/自由价格 + UI 图标/工厂面板）
-- Python 版本：0.6.0
-- 测试：127 fast tests，默认快速套件 **~97s**（12 个 `@slow` skipped，全部 OK）；
+- Python 版本：0.6.0（迁移期 oracle；**唯一逻辑源已改为 TS/JS**）
+- JS/TS 发行引擎：`feature/html-engine` 进行中；本地 Python 驾驶舱暂时
+  仍是诊断界面，不是最终发行版。
+- 测试：128 fast tests，默认快速套件 **~127s**（12 个 `@slow` skipped，全部 OK）；
   240/600/1200 月长程用 `ECOSIM_SLOW_TESTS=1` 或
   `scripts/validate_v05.py`，不再每次开发都跑。性能：240 月约 15–16s，
   60 月约 4s（优化前 131s / 21.5s）。
@@ -137,16 +139,16 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 集成规则：子代理在各自 worktree 提交；主代理审查 diff、跑测试、
 cherry-pick 到 `v0.4-integration`；冲突时以测试和用户可见指标为准。
 
-**标准工作流（用户确认，必须遵守）**：
+**标准工作流（2026-10-25 用户确认，必须遵守）**：
 
-1. **迭代阶段**：Python + 本地 Web UI。`src/ecosim/` 模块低耦合高内聚，
-   方便快速改逻辑；`scripts/serve_dashboard.py` + `web/v04/` 提供诊断界面。
-   JavaScript 也能做类似结构，当前选 Python 是为了迭代速度和可测试性。
-2. **发行阶段**：最终产品是**一个 HTML 文件**，包含全部经济仿真逻辑和
-   UI，电脑双击/手机浏览器直接打开，方便传播；不依赖外部文件/CDN/图片/
-   字体/Python。不要在每次小改动时生成巨大自包含 HTML，发行里程碑统一构建。
-3. Python 是逻辑权威参考；JS 发行版用固定 seed 黄金运行复现关键指标。
-   本地驾驶舱是诊断界面，不是最终发行版。
+1. **唯一逻辑源：TypeScript/JavaScript**。经济逻辑、UI、测试都在 JS/TS
+   模块中维护，ES modules/TypeScript 低耦合高内聚；Node 测试 + 浏览器
+   迭代。不再新增 Python 功能。
+2. **发行：单文件 HTML**。构建脚本把 JS/CSS/图标/数据内联成一个 HTML；
+   双击/手机浏览器直接打开，不依赖外部文件/CDN/图片/字体/Python。
+   发行里程碑统一构建，不在每次小改动时生成巨大 HTML。
+3. **Python = 迁移期 oracle**。`src/ecosim/` 只作黄金运行/参数校准参考；
+   JS parity 后冻结，不双维护。新机制（A2/人口/银行）直接以 JS/TS 实现。
 
 ## 工作方式
 
