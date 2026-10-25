@@ -1,88 +1,99 @@
-# V0.4 交接（会话入口）
+# V0.5 交接（会话入口）
 
 > 这是每次会话开始时自动加载的一页交接。详细档案见
-> `docs/WORKSTREAM_V0.4.md`；设计与决策见
-> `docs/decisions/0004-historical-regimes.md`；代码契约见
-> `03_架构设计文档.md` 第 18 节。
+> `docs/WORKSTREAM_V0.5.md`；人口设计与修复见
+> `docs/DEMOGRAPHICS_DESIGN.md`；价格指导价见
+> `docs/decisions/0005-guidance-prices.md`（feature/price-guidance 分支）。
 
 ## 当前基线
 
 - 分支：`v0.4-integration`
-- 最新提交：`d2ffbcb`（计划/熟练度单位修复，负利润率修正）+ 文档
-- Python 版本：0.4.0（工作区 V0.4.2）
-- 测试：65 个全绿（33 原有 + 10 不变量 + 7 服务业 + 5 化肥 + 10 软 markup）
+- 最新提交：`7429a3b`（V0.5 人口/代际/退休金模块 + v0.5.1 救济/养老金/土地修复）
+- Python 版本：0.5.0
+- 测试：88 个全绿（人口单测/不变量/测试强化；855.9s，seed=1）
 - UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
-- 已实现：会计修正、L1 生产—库存—订单、L3 投资/手工 t0/替换投资、
-  L5 工资曲线/精确用工/跳槽修正、粮食平准库存、银行存款中介、
-  classical / keynesian / mmt 三种制度、CLI `--regime`、制度对比脚本。
+  （仍为 V0.4 面板；D2 人口面板待做）
+- 已实现：V0.4 全部机制 + V0.5 个体年龄/性别/家庭、Gompertz 死亡、
+  ASFR 生育、儿童 allowance/消费、退休、PAYG 养老金（发薪代扣）、
+  `LATE_CAPITALISM`、粮食救济缓冲、土地继承/无地承接、人口统计。
+- 长程验证：`scripts/validate_v05.py --months 1200 --seed 1 --jobs 4`。
 
-## 当前 240 月结果（seed=1）
+## 当前 240 月结果（seed=1，validation_v05/seed1_240.json）
 
-| 制度 | 存活 | 死亡 | 失业率 | GDP | 投资 | 利润率 | 债务 | 央行货币 | 服务业企业 |
+| 制度 | 人口 | 儿童 | 退休 | 年出生 | 饥饿死亡 | 失业率 | 利润率 | 养老金基金 | 粮价 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| classical | 1092 | 8 | 10.9% | 30,074 | 7,148 | +0.30% | 0 | 0 | 426 |
-| keynesian | 1100 | 0 | 0.0% | 33,058 | 2,143 | -0.01% | 399,479 | 0 | 472 |
-| mmt | 1100 | 0 | 0.0% | 35,014 | 1,126 | +0.01% | 2,720,346 | 2,720,346 | 281 |
+| classical | 1670 | 285 | 0 | 17 | 0 | 16.8% | -0.16% | 0 | 81 |
+| keynesian | 1639 | 323 | 99 | 14 | 0 | 0.7% | +0.06% | 199,999 | 117 |
+| mmt | 1584 | 285 | 137 | 8 | 0 | 0.0% | -0.09% | 301,126 | 117 |
+| late_capitalism | 1304 | 171 | 128 | 3 | 0 | 1.7% | -0.04% | 129,263 | 99 |
 
-核心行业（钢/砖/纺织/机械）零产出 0 个月；建筑零产出 19/11/8 个月。
-利润率是**资本主义部门**口径；`all_profit_rate` 仍受 household/自雇影响，
-见 stats 的 `all_profit_rate`/`household_profit`。
+- 金本位（classical/keynesian/late）货币守恒；MMT 央行货币约 2.10M（显式）。
+- `pension_recipients` 含到龄自耕农；`retirees` 只统计退出劳动市场的雇员。
+- 利润率是资本主义部门口径；三制度接近零，古典/MMT/晚期略负。
+
+## 1200 月长程验证（seed=1，validation_v05/seed1_1200.json）
+
+| 制度 | 人口 | 儿童 | 退休 | 最后 12 月出生 | 累计饥饿死亡 | 结论 |
+|---|---:|---:|---:|---:|---:|---|
+| classical | 598 | 95 | 0 | 12 | 974 | 仅饥饿项失败 |
+| keynesian | 1216 | 241 | 156 | 15 | 239 | 仅饥饿项失败 |
+| mmt | 930 | 159 | 186 | 7 | 0 | 通过 |
+| late_capitalism | 354 | 48 | 64 | 1 | 0 | 通过 |
+
+- 养老金基金/预算恒等式在四剧本均通过（补贴已计入 `pension_revenue`）。
+- 古典/Keynesian 的 1200 月饥荒是长周期经济内核问题：失业/负利润、
+  `estate_land` 闲置（无继承/承接人时不拍卖）、食品产量低于需求。
+  人口模块的救济缓冲避免了即时饥荒，但不能替代土地市场/需求/价格机制。
+- 晚期资本主义按设计进入老龄化/人口收缩（354 人、末年少儿出生），不是崩溃。
 
 ## 下一步优先级
 
-1. **利润率修正（已完成）**：计划分母改用熟练度调整后的有效产能，利润率
-   -0.27%/-0.44%/-0.44% → +0.30%/-0.01%/+0.01%；服务自雇工资/经营所得重复
-   计入已修；利润率改为资本主义部门口径。
-2. **UI（已完成）**：本地前后端分离驾驶舱已合并；截图见
-   `web/screenshots/v04-cockpit-240.png`。
-3. **服务业（已完成）**：古典失业 43%→10.9%（利润率修正后），Keynesian/MMT 0%；
-   下一步校准服务价格路径和自雇进入/退出。
-4. **库存/建筑/古典死亡（下一轮）**：铁/机械/砖仍有 30–500 个月需求库存，
-   建筑零产出 8–19 个月，古典 240 月 8 例死亡；需要库存消化速度、建筑需求
-   与底层流动性/食品券。
-5. **信贷冲击死亡链（最高优先）**：`docs/CREDIT_SHOCK_DIAGNOSIS.md` 已定位：
-   粮食市场出清，但零现金工人≈饥饿人数；信贷冻结→工资账单无法融资→欠薪→
-   买不起食品。下一步：最后贷款人/贴现窗口、wage_arrears、食品券、
-   银行冻结规则校准。
-6. **人口/代际/退休金/百年仿真（用户新需求，待设计）**：人口结构、出生率、
-   再生产成本、退休年龄、养老金/供养比；1200 月（100 年）仿真；各时代剧本。
-7. **L2 价格（已有可选版）**：`price_regime="markup_soft"` 已合并，默认 band；
-   自由 markup/LES 仍是实验分支。
-8. **验证套件（已刷新）**：冲击/不变量脚本已合并；下一步 20–100 seeds、
-   服务业/利润率修正后的完整冲击矩阵。
-9. **HTML 单文件发行版**：本地驾驶舱已可用；单文件发行版仍需同步 V0.4。
+1. **D2 驾驶舱人口面板**：人口金字塔、出生/死亡、抚养比、养老金收支；
+   `/api/run` 增加 demography 分组；时间轴支持 1200 月。
+2. **D3 剧本**：`IRON_AGE`（无工业/高生育高死亡/儿童劳动）、可选
+   `NEOLIBERAL`；`LATE_CAPITALISM` 已实现。
+3. **D4 信贷冲击稳定器（最高优先）**：`docs/CREDIT_BACKSTOP_DESIGN.md`
+   已设计：wage_arrears、LLR/贴现窗口、食品券、银行冻结规则校准；
+   用 240 月信贷冲击对比死亡/零现金/饥饿。
+4. **D5 百年仿真/长程修复**：土地 estate 拍卖或无地分配、长期负利润、
+   古典/Keynesian 饥荒；20–100 seeds 验证。
+5. **价格指导价 v2**：`feature/price-guidance` 已实现 opt-in `guidance`
+   （ADR 0005）。v1 用订单簿库存 vs 月需求导致通缩—失业—饥荒；v2 改用
+   库存覆盖月数（库存/月度需求），仍在 240 月对比中。默认保持 `band`。
+6. **HTML 单文件发行版**：本地驾驶舱可用；单文件发行版仍需同步 V0.5。
 
 ## 并行版本树（进行中）
 
-基线：`v0.4.2` 主线；每个 feature 从当前 `v0.4-integration` HEAD 分支：
+基线：`v0.4-integration`；每个 feature 从当前 HEAD 分支：
 
 | 分支 | worktree | 状态/目标 |
 |---|---|---|
-| `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | **已合并** `d8cdae7`：前后端分离 UI（Python http.server + HTML/JS，localhost） |
-| `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停（减少 CPU/风扇） |
-| `feature/services` | `.claude/worktrees/services` | **已合并** `79d27de`：服务业/非正规自雇 |
+| `feature/demography` | `.claude/worktrees/demography` | **已合并** `365aa93`：V0.5 人口/代际/退休金 |
+| `fix/demography-safety` | `.claude/worktrees/demography-fix` | **已合并** `7429a3b`：救济/养老金/土地/统计修复 |
+| `feature/price-guidance` | `.claude/worktrees/price-guidance` | **进行中**：opt-in 指导价 v1（`33ca831`）+ v2 库存覆盖月数 |
+| `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
+| `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |
+| `feature/services` | `.claude/worktrees/services` | 已合并 `79d27de` |
 | `feature/l2` | `.claude/worktrees/l2` | 暂停（自由 markup/LES WIP） |
-| `feature/l2-soft` | `.claude/worktrees/l2-soft` | **已合并** `7c97df0`：参考价锚定软 markup |
-| `feature/fertilizer` | `.claude/worktrees/fertilizer` | **已合并** `61fae0e`：化肥周转资金/连续供应 |
-| `feature/validation` | `.claude/worktrees/validation` | **已合并** `1891485`：冲击/不变量测试 |
-| `feature/plan-skill` | `.claude/worktrees/plan-skill` | **已合并** `ed231e1`：计划/熟练度单位修复、利润率修正 |
-| `feature/demography` | `.claude/worktrees/demography` | **进行中**：V0.5 人口/代际/退休金/百年仿真 |
+| `feature/l2-soft` | `.claude/worktrees/l2-soft` | 已合并 `7c97df0` |
+| `feature/fertilizer` | `.claude/worktrees/fertilizer` | 已合并 `61fae0e` |
+| `feature/validation` | `.claude/worktrees/validation` | 已合并 `1891485` |
+| `feature/plan-skill` | `.claude/worktrees/plan-skill` | 已合并 `ed231e1` |
 
-集成规则：子代理在各自 worktree 提交；主代理审查 diff、跑测试、按
-services → validation → UI 的顺序 cherry-pick 到 `v0.4-integration`；
-暂停的 l2/fertilizer 等机器空闲/用户确认后再续。冲突时以测试和用户可见指标为准。
+集成规则：子代理在各自 worktree 提交；主代理审查 diff、跑测试、
+cherry-pick 到 `v0.4-integration`；冲突时以测试和用户可见指标为准。
 
 **UI 方向（用户确认）**：前后端分离，不为每个版本生成巨大自包含 HTML。
 `scripts/serve_dashboard.py` 用 Python 标准库 `http.server` 提供
 `/api/run` 和 `/api/compare`；`web/v04/index.html` + `app.js` 通过 fetch 渲染。
-启动后浏览器打开 `http://127.0.0.1:8765`。这也更省 token/内存。
+启动后浏览器打开 `http://127.0.0.1:8765`。
 
 ## 工作方式
 
 - 长任务用子代理 + git worktree 并行开发；每个 feature 一个分支/提交。
 - 主代理负责方案选型、审查、跑测试、cherry-pick 到 `v0.4-integration`。
 - 不直接改 `main`；不提交 API key/本地设置/临时产物。
-- 每完成一个阶段，更新本文件和 `docs/WORKSTREAM_V0.4.md`。
+- 每完成一个阶段，更新本文件和 `docs/WORKSTREAM_V0.5.md`。
 - 用户看的中间产品必须有 UI；纯 CLI 只作为调试/验证。
 
 ## 常用命令
@@ -93,15 +104,18 @@ python -m unittest discover -s tests -v
 python -m ecosim --months 240 --seed 1 --regime classical
 python -m ecosim --months 240 --seed 1 --regime keynesian
 python -m ecosim --months 240 --seed 1 --regime mmt
+python -m ecosim --months 240 --seed 1 --regime late_capitalism
 python scripts/compare_regimes.py --months 240 --seed 1 --json artifacts/regimes_240.json
+python scripts/validate_v05.py --months 1200 --seed 1 --jobs 4
 ```
 
 ## 关键文件
 
-- `src/ecosim/engine.py`：月度主循环、L1 计划、政府结算、银行中介
-- `src/ecosim/government.py`：制度/政府/央行/就业保障数据结构
-- `src/ecosim/scenarios.py`：`ScenarioConfig` 与三种历史阶段预设
-- `src/ecosim/models.py`：AssetPool / FoodReserve / Bank deposits
-- `tests/test_feedback.py`、`tests/test_government.py`：新机制回归
-- `scripts/compare_regimes.py`：制度对比
-- `docs/WORKSTREAM_V0.4.md`：完整进度与剩余问题
+- `src/ecosim/engine.py`：月度主循环、人口过程、养老金、粮食救济、土地遗产
+- `src/ecosim/government.py`：制度/政府/央行/养老金台账
+- `src/ecosim/scenarios.py`：`ScenarioConfig` 与 classical/keynesian/mmt/late_capitalism
+- `src/ecosim/models.py`：Worker 年龄/家庭/养老金字段、AssetPool/FoodReserve/Bank
+- `tests/test_demography.py`：人口/养老金/救济/土地回归
+- `scripts/validate_v05.py`：1200 月长程验证
+- `docs/DEMOGRAPHICS_DESIGN.md`：设计 + v0.5.1 修复状态
+- `docs/CREDIT_BACKSTOP_DESIGN.md`：D4 设计

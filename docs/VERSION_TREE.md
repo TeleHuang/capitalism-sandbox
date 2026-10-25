@@ -25,6 +25,8 @@
 | `d2ffbcb` | 计划/熟练度单位修复 + 利润率资本主义部门口径（cherry-pick 自 `feature/plan-skill`，65 tests） |
 | `76d1eac` | V0.4.2 驾驶舱/版本/文档更新，标签 `v0.4.2` |
 | `6e09300` | V0.5 人口/代际/退休金设计草案 |
+| `365aa93` | V0.5 人口/代际/退休金模块（cherry-pick 自 `feature/demography` `263e99f`） |
+| `7429a3b` | V0.5.1 救济/养老金/土地/统计修复（cherry-pick 自 `fix/demography-safety` `f797b37`，88 tests） |
 
 ## Feature 分支
 
@@ -38,6 +40,9 @@
 | `feature/plan-skill` | `ed231e1` | 已合并 | 计划按熟练度调整产能、负利润率修正（主线 `d2ffbcb`） |
 | `feature/fertilizer` | `61fae0e` | 已合并 | 化肥周转资金/招聘优先/2 台上限（主线 `f3d4248`） |
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
+| `feature/demography` | `263e99f` | 已合并 | V0.5 人口/代际/退休金/晚期资本主义（主线 `365aa93`） |
+| `fix/demography-safety` | `f797b37` | 已合并 | 救济缓冲/政府融资/PAYG 代扣/土地继承/测试强化（主线 `7429a3b`） |
+| `feature/price-guidance` | `33ca831` | 进行中 | opt-in 供求指导价 v1（ADR 0005）；v2 库存覆盖月数对比中 |
 
 ## UI 启动
 

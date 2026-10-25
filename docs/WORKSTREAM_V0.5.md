@@ -15,11 +15,11 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| D1 | 人口核心：年龄/性别/儿童/退休/出生/死亡/养老金/统计/测试 | 进行中（`feature/demography`） |
-| D2 | 驾驶舱人口面板：人口金字塔、出生/死亡、抚养比、养老金 | 待 D1 |
-| D3 | 剧本：IRON_AGE、LATE_CAPITALISM、可选 NEOLIBERAL | 待 D1 |
-| D4 | 信贷冲击稳定器：LLR/贴现窗口、wage_arrears、食品券、冻结规则 | 待 D1 |
-| D5 | 1200 月验证：人口不灭绝/不爆炸、养老金可持续、20 seeds 抽样 | 待 D1–D4 |
+| D1 | 人口核心：年龄/性别/儿童/退休/出生/死亡/养老金/统计/测试 | **已完成**：`feature/demography` `263e99f` + `fix/demography-safety` `f797b37`，主线 `365aa93`/`7429a3b`；88 tests |
+| D2 | 驾驶舱人口面板：人口金字塔、出生/死亡、抚养比、养老金 | 待开始（D1 已就绪） |
+| D3 | 剧本：IRON_AGE、LATE_CAPITALISM、可选 NEOLIBERAL | `LATE_CAPITALISM` 已完成；IRON_AGE/NEOLIBERAL 待做 |
+| D4 | 信贷冲击稳定器：LLR/贴现窗口、wage_arrears、食品券、冻结规则 | 设计完成（`docs/CREDIT_BACKSTOP_DESIGN.md`）；实现待做 |
+| D5 | 1200 月验证：人口不灭绝/不爆炸、养老金可持续、20 seeds 抽样 | 脚本已就绪；seed=1 已跑：MMT/晚期通过，古典/Keynesian 仍有长程饥荒 |
 | D6 | 单文件 HTML 发行版同步 V0.5 | 待 D5 |
 
 ## D1 验收
@@ -33,6 +33,32 @@
 - stats：population/children/working_age/retirees/labor_force/employed/
   unemployed/births/deaths/dependency_ratio/age_histogram/pension_*；
 - 65 旧测试 + 新测试通过；240/600 月稳定；1200 月每制度至少一次冒烟。
+
+## D1 结果（v0.5.1，seed=1）
+
+240 月（`scripts/validate_v05.py --months 240`，四剧本全部 `ok`）：
+
+| 制度 | 人口 | 儿童 | 退休 | 年出生 | 饥饿死亡 | 失业率 | 利润率 | 养老金基金 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| classical | 1670 | 285 | 0 | 17 | 0 | 16.8% | -0.16% | 0 |
+| keynesian | 1639 | 323 | 99 | 14 | 0 | 0.7% | +0.06% | 199,999 |
+| mmt | 1584 | 285 | 137 | 8 | 0 | 0.0% | -0.09% | 301,126 |
+| late_capitalism | 1304 | 171 | 128 | 3 | 0 | 1.7% | -0.04% | 129,263 |
+
+1200 月（`--months 1200`）：
+
+| 制度 | 人口 | 最后 12 月出生 | 累计饥饿死亡 | 结论 |
+|---|---:|---:|---:|---|
+| classical | 598 | 12 | 974 | 仅饥饿项失败 |
+| keynesian | 1216 | 15 | 239 | 仅饥饿项失败 |
+| mmt | 930 | 7 | 0 | 通过 |
+| late_capitalism | 354 | 1 | 0 | 通过 |
+
+- v0.5.1 修复：救济缓冲 1.5 个月、政府融资缺口不再重复扣减、
+  PAYG 发薪代扣、自耕农到龄养老金、土地继承/无地承接、抚养比/孤儿/
+  初始年龄/ASFR 归一化；详见 `docs/DEMOGRAPHICS_DESIGN.md` §12。
+- 已知长程问题：古典/Keynesian 1200 月饥荒；`estate_land` 无人继承时
+  不拍卖；长期利润率接近零/负。属于 D5 下一轮。
 
 ## D3 剧本草案
 
@@ -59,11 +85,25 @@
 - 同 seed 确定；金本位货币守恒；
 - 冲击—恢复（需求/生产率/信贷）在人口结构下仍成立。
 
+**当前工具与结果**：
+
+```powershell
+python scripts/validate_v05.py --months 1200 --seed 1 --jobs 4
+python scripts/validate_v05.py --months 240 --seed 1 --jobs 4
+```
+
+- seed=1 结果见 `artifacts/validation_v05/seed1_{240,1200}.json`；
+- MMT/晚期资本主义 1200 月通过；古典/Keynesian 仅饥饿项失败；
+- 养老金恒等式/预算恒等式四剧本通过；金本位货币漂移 <1e-2；
+- 待做：20–100 seeds、土地 estate 拍卖/无地分配、长期负利润与需求结构。
+
 ## 风险
 
 - 人口参数未闭合导致爆炸/灭绝；
-- 养老金赤字/货币守恒；
-- 儿童/退休者失业口径；
+- 养老金赤字/货币守恒；补贴必须同时进入 `pension_revenue`；
+- 儿童/退休者失业口径；自耕农到龄领养老金但不退出经营；
 - 生育/死亡独立 RNG 改变旧 golden；
-- 1200 月性能（~3 分钟/制度），避免同时多进程；
-- 资本家未老化（V0.5 限制），100 年财富集中需谨慎解读。
+- 1200 月性能（~3–5 分钟/制度），避免同时多进程；
+- 资本家未老化（V0.5 限制），100 年财富集中需谨慎解读；
+- `estate_land` 无继承/承接人时仍会积累，长期粮食产量下降；
+- 价格指导价 `guidance` 仍为实验（v1 库存/流量错误导致通缩螺旋）。
