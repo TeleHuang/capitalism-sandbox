@@ -29,7 +29,9 @@ class ScenarioConfig:
     name: str = "第一次工业革命"
     policy_regime: PolicyRegime = PolicyRegime.CLASSICAL
     money_regime: MoneyRegime = MoneyRegime.GOLD
-    price_regime: str = "band"
+    # V0.6 起默认自由成本加成价格（无成本带，仅绝对安全轨）；
+    # band/markup_soft 保留为显式旧制度，用于对照/回归。
+    price_regime: str = "free"
     # V0.6：默认使用收入依赖的 Stone-Geary 需求；"fixed"/"les" 保留为
     # 历史对照实验。
     demand_regime: str = "geary"

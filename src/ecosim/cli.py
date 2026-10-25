@@ -76,17 +76,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--price-regime",
         choices=("band", "markup_soft", "free"),
-        default="band",
+        default="free",
         help=(
-            "价格制度：band（默认参考价+成本带）/ markup_soft（参考价锚定的"
-            "软成本加成）/ free（成本加成+供求，无成本带，仅绝对安全轨）"
+            "价格制度：free（默认：成本加成+供求，无成本带，仅绝对安全轨）/ "
+            "band（旧参考价+成本带）/ markup_soft（软成本加成）"
         ),
     )
     args = parser.parse_args(argv)
 
-    scenario = REGIMES[args.regime]
-    if args.price_regime != "band":
-        scenario = replace(scenario, price_regime=args.price_regime)
+    scenario = replace(
+        REGIMES[args.regime], price_regime=args.price_regime
+    )
     engine = run(args.months, args.seed, args.every, scenario)
     final = engine.stats[-1]
     print()

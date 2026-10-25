@@ -39,8 +39,10 @@
 
 - 食物占比从 62.9% 降到 40–49%；服务占比 36–45%；肉类市场存在但工人实际工资
   仍接近 1 个温饱篮子，工人买肉≈0（高收入 Engel 行为由单测覆盖）。
-- `free` 已删成本上下轨（仅绝对安全轨）；240 月四剧本无饥饿、金本位货币守恒。
-  classical free 失业 20.3% vs band 3.1%，**默认保持 band**；free 仍 opt-in。
+- `free` 已删成本上下轨（仅内部数值夹紧），UI/统计不再暴露价格带；
+  **V0.6 起默认 `free`**，band/markup_soft 为显式旧制度。
+  classical free 失业 20.3% vs band 3.1%，这是需求/工资结构未完全闭合，
+  后续 A2/C 继续处理；不再用 band 掩盖。
 - 价格方向不再统一：classical free CPI 90（通缩）、keynesian free CPI 166（通胀）。
 - 复利年化/过去 12 月利润率已在驾驶舱显示（`profit_rate_annualized`/
   `profit_rate_annual`）。
@@ -102,8 +104,8 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
    `feature/land-reclamation`，estate 拍卖/再分配。
 4. **E 单文件 HTML 发行版**：玩家机制 UI（产品图标、工厂面板、2^N、
    矿类/土地/消费/人口说明），全部逻辑/资源内联；当前 `web/v04` 只是诊断版。
-5. **重新评估 `price_regime="free"` 默认**：A2/C 完成后看 classical 失业/
-   价格方向；当前默认仍 band。
+5. **`price_regime="free"` 已是默认**：无成本价格带；A2/C 后继续压
+   classical 失业/价格方向。`band` 只作旧制度对照。
 6. **D3 剧本/长程**：`IRON_AGE`、`NEOLIBERAL`；20–100 seeds、
    1200 月、长期负利润与剩余古典饥荒。
 7. **D4 信贷冲击稳定器**：`docs/CREDIT_BACKSTOP_DESIGN.md` 的
@@ -117,7 +119,7 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 |---|---|---|
 | `feature/demography` | `.claude/worktrees/demography` | **已合并** `365aa93`：V0.5 人口/代际/退休金 |
 | `fix/demography-safety` | `.claude/worktrees/demography-fix` | **已合并** `7429a3b`：救济/养老金/土地/统计修复 |
-| `feature/price-guidance` | `.claude/worktrees/price-guidance` | **待合并/待组合测试**：opt-in 指导价 v1（`33ca831`）+ v2（`7c1d949`）；纯价格仍崩溃，默认 band |
+| `feature/price-guidance` | `.claude/worktrees/price-guidance` | **待合并/待组合测试**：opt-in 指导价 v1（`33ca831`）+ v2（`7c1d949`）；默认已改为 free，guidance 仍 opt-in |
 | `fix/household-farm-income` | `.claude/worktrees/household-income` | **已合并** `0e15fad`：自耕农剩余收入/不借债发自己工资 |
 | `feature/land-reclamation` | `.claude/worktrees/land-reclamation` | **未合并** `2f79f0e`：P1–P3 开垦/estate；缺最终全量+600/1200，且触发阈值 180 太高 |
 | `feature/ui-icons` | `.claude/worktrees/ui-icons` | **已合并** `ca5ebeb`：产品图标、工厂面板、机制说明（V0.6 UI） |

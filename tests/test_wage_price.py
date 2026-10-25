@@ -209,22 +209,17 @@ class WageRuleTests(unittest.TestCase):
 
 
 class FreePriceRegimeTests(unittest.TestCase):
-    def test_free_regime_has_only_absolute_rails(self):
+    def test_free_regime_exposes_no_price_rails(self):
         config = dataclasses.replace(
             CLASSICAL_LAISSEZ_FAIRE, price_regime="free"
         )
         engine = make_engine(config)
         engine._update_price_bands()
-        for good in Good:
-            self.assertAlmostEqual(engine.market.floors[good], PRICE_FLOOR)
-            self.assertAlmostEqual(
-                engine.market.ceilings[good],
-                INITIAL_PRICES[good] * FREE_PRICE_CAP_MULT,
-            )
-        # 成本锚存在，但不是价格下限。
+        # free 不向 UI/统计暴露任何硬价格边界；绝对数值夹紧在
+        # Market._update_free_price 内部完成。
+        self.assertEqual(engine.market.floors, {})
+        self.assertEqual(engine.market.ceilings, {})
         self.assertTrue(engine.market.cost_anchors)
-        for good, cost in engine.market.cost_anchors.items():
-            self.assertLess(engine.market.floors[good], cost)
 
     def test_free_ask_can_be_below_actual_cost(self):
         engine = Engine(seed=1)
@@ -244,7 +239,7 @@ class FreePriceRegimeTests(unittest.TestCase):
         self.assertGreater(price, 0.0)
         self.assertTrue(math.isfinite(price))
         self.assertLess(price, actual_cost)
-        self.assertGreaterEqual(engine.market.floors[Good.BRICK], PRICE_FLOOR)
+        self.assertNotIn(Good.BRICK, engine.market.floors)
 
     def test_free_price_target_passes_through_normal_cost(self):
         engine = Engine(seed=1)
@@ -273,8 +268,8 @@ class FreePriceRegimeTests(unittest.TestCase):
             for price in stat["prices"].values():
                 self.assertGreater(price, 0.0)
                 self.assertTrue(math.isfinite(price))
-        for good in Good:
-            self.assertAlmostEqual(engine.market.floors[good], PRICE_FLOOR)
+        self.assertEqual(engine.market.floors, {})
+        self.assertEqual(engine.market.ceilings, {})
 
 
 class SlowSmokeTests(unittest.TestCase):
@@ -298,8 +293,8 @@ class SlowSmokeTests(unittest.TestCase):
         self.assertAlmostEqual(
             final["money_total"], engine.money_initial, places=2
         )
-        for good in Good:
-            self.assertAlmostEqual(engine.market.floors[good], PRICE_FLOOR)
+        self.assertEqual(engine.market.floors, {})
+        self.assertEqual(engine.market.ceilings, {})
 
 
 if __name__ == "__main__":

@@ -395,6 +395,12 @@
   .band-name { color: var(--ink-2); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .band-meter { position: relative; height: 8px; border-radius: 999px; background: var(--grid); overflow: visible; }
   .band-meter::before { content: ""; position: absolute; inset: 3px 0; background: rgba(255,255,255,0.08); border-radius: 999px; }
+  .band-meter.band-free {
+    display: flex; align-items: center; justify-content: center;
+    height: 15px; border: 1px dashed var(--line); background: transparent;
+    color: var(--muted); font-size: 9px; letter-spacing: 0.04em;
+  }
+  .band-meter.band-free::before { display: none; }
   .band-dot {
     position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%;
     transform: translate(-50%, -50%); background: var(--series-4);

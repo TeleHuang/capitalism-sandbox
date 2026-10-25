@@ -102,14 +102,15 @@ class MarkupSoftUnitTests(unittest.TestCase):
         self.assertLessEqual(enterprise.markup, 0.40)
 
 
-class DefaultBandUnchangedTests(unittest.TestCase):
-    def test_default_regime_is_still_band(self):
-        self.assertEqual(ScenarioConfig().price_regime, "band")
-        self.assertEqual(Engine(seed=1).price_regime, "band")
+class PriceRegimeDefaultsTests(unittest.TestCase):
+    def test_default_regime_is_free(self):
+        # V0.6 起用户默认走自由成本加成；band 保留为显式旧制度。
+        self.assertEqual(ScenarioConfig().price_regime, "free")
         self.assertEqual(MARKUP_SOFT.price_regime, "markup_soft")
 
     def test_band_pricing_formula_and_markup_are_unchanged(self):
         engine = Engine(seed=1)
+        engine.price_regime = "band"
         self.assertEqual(engine.price_regime, "band")
         enterprise = _brick_enterprise(engine, wage=9.5, inventory=5.0, sales=2.0)
         before_markup = enterprise.markup

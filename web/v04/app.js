@@ -41,21 +41,21 @@
   var REGIME_DEFS = [
     {
       id: "classical", label: "古典", name: "古典自由放任（pre-Keynesian）",
-      policy_regime: "classical", money_regime: "gold", price_regime: "band",
+      policy_regime: "classical", money_regime: "gold", price_regime: "free",
       demand_regime: "fixed", bank_intermediation: false,
       tax_rate_wage: 0, tax_rate_profit: 0, ui_replacement: 0,
       public_investment_rate: 0, job_guarantee: false, jg_wage: 0
     },
     {
       id: "keynesian", label: "凯恩斯", name: "凯恩斯福利国家",
-      policy_regime: "keynesian", money_regime: "gold", price_regime: "band",
+      policy_regime: "keynesian", money_regime: "gold", price_regime: "free",
       demand_regime: "fixed", bank_intermediation: true,
       tax_rate_wage: 0.08, tax_rate_profit: 0.08, ui_replacement: 0.5,
       public_investment_rate: 0.15, job_guarantee: false, jg_wage: 0
     },
     {
       id: "mmt", label: "MMT", name: "MMT 主权货币 + 就业保障",
-      policy_regime: "mmt", money_regime: "credit", price_regime: "band",
+      policy_regime: "mmt", money_regime: "credit", price_regime: "free",
       demand_regime: "fixed", bank_intermediation: true,
       tax_rate_wage: 0.08, tax_rate_profit: 0.08, ui_replacement: 0.45,
       public_investment_rate: 0.08, job_guarantee: true, jg_wage: 30
@@ -63,7 +63,7 @@
     {
       id: "late_capitalism", label: "晚期资本主义",
       name: "晚期资本主义（低生育/长寿/老龄化）",
-      policy_regime: "keynesian", money_regime: "gold", price_regime: "band",
+      policy_regime: "keynesian", money_regime: "gold", price_regime: "free",
       demand_regime: "fixed", bank_intermediation: true,
       tax_rate_wage: 0.10, tax_rate_profit: 0.10, ui_replacement: 0.40,
       public_investment_rate: 0.12, job_guarantee: false, jg_wage: 0
@@ -773,8 +773,8 @@
     }
     bits.push(regime.money_regime === "credit" ? "信用货币" : "金本位");
     bits.push(regime.bank_intermediation ? "银行中介" : "无银行中介");
-    bits.push(regime.price_regime === "markup" ? "成本加成价格" : "价格带");
-    bits.push(regime.demand_regime === "les" ? "LES 需求" : "固定篮子需求");
+    bits.push(regime.price_regime === "free" ? "自由成本加成" : regime.price_regime === "markup_soft" ? "软成本加成" : "价格带");
+    bits.push(regime.demand_regime === "les" ? "LES 需求" : "收入依赖需求");
     return bits;
   }
   function regimeHint(regime) {
@@ -1551,14 +1551,21 @@
       var previous = index > 0 ? goodAt("prices", good.id, index - 1) : null;
       var change = previous == null ? "起始月" : deltaText(price, previous, "pct");
       var alert = band.alert ? ' · <span class="mini-alert">' + band.text + '</span>' : "";
+      var hasBand = ceiling > floor && ceiling > 0;
+      var bandText = hasBand
+        ? fmtNum(floor, 2) + "–" + fmtNum(ceiling, 2)
+        : "自由定价 · 无硬边界";
+      var bandTitle = hasBand
+        ? "价格带下轨 " + fmtNum(floor, 2) + " · 上轨 " + fmtNum(ceiling, 2)
+        : "自由成本加成：不设成本/价格带，只有数值安全夹紧";
       return '<article class="mini-card mini-card-action" data-factory-good="' + escapeHtml(good.id) +
         '" tabindex="0" role="button" aria-label="打开' + escapeHtml(good.label) + '工厂面板">' +
         '<div class="mini-head"><span class="mini-title" title="' + escapeHtml(good.label) + '">' +
         goodIcon(good.id, "mini-icon") +
         '<span class="mini-title-text">' + escapeHtml(good.label) + '</span></span>' +
         '<span class="mini-value">' + fmtNum(price, 2) + '</span></div>' +
-        '<div class="mini-sub" title="价格带下轨 ' + escapeHtml(fmtNum(floor, 2)) + ' · 上轨 ' + escapeHtml(fmtNum(ceiling, 2)) + ' · 点击标题打开工厂">' +
-        fmtNum(floor, 2) + '–' + fmtNum(ceiling, 2) + ' · ' + escapeHtml(change) + alert + '</div>' +
+        '<div class="mini-sub" title="' + escapeHtml(bandTitle) + ' · 点击标题打开工厂">' +
+        escapeHtml(bandText) + ' · ' + escapeHtml(change) + alert + '</div>' +
         '<div class="chart-host mini-chart" data-chart="mini" data-kind="price" data-key="' + escapeHtml(good.id) + '"></div>' +
         '</article>';
     }).join("");
@@ -2178,6 +2185,7 @@
       var ceiling = goodAt("price_ceilings", good.id, index);
       var streak = goodAt("zero_output_streak", good.id, index);
       var band = bandState(price, floor, ceiling);
+      var hasBand = ceiling > floor && ceiling > 0;
       var zeroBadge = streak > 0 ?
         '<span class="badge ' + (streak >= 3 ? "bad" : "warn") + '">零产出 ' + fmtInt(streak) + ' 月</span>' :
         '<span class="badge ok">正常</span>';
@@ -2190,8 +2198,8 @@
         '<td>' + fmtNum(goodAt("supply", good.id, index), 2) + '</td>' +
         '<td>' + fmtNum(goodAt("volumes", good.id, index), 2) + '</td>' +
         '<td class="num-strong">' + fmtNum(price, 2) + bandBadge + '</td>' +
-        '<td class="muted">' + fmtNum(floor, 2) + '</td>' +
-        '<td class="muted">' + fmtNum(ceiling, 2) + '</td>' +
+        '<td class="muted">' + (hasBand ? fmtNum(floor, 2) : "—") + '</td>' +
+        '<td class="muted">' + (hasBand ? fmtNum(ceiling, 2) : "—") + '</td>' +
         '<td>' + zeroBadge + '</td>' +
         '</tr>';
     }).join("");
@@ -2344,15 +2352,20 @@
       var floor = goodAt("price_floors", good.id, index);
       var ceiling = goodAt("price_ceilings", good.id, index);
       var band = bandState(price, floor, ceiling);
+      var hasBand = ceiling > floor && ceiling > 0;
       var badge = band.alert ? ' <span class="badge ' + (band.text === "触底" ? "bad" : "warn") + '">' + band.text + '</span>' : "";
+      var meter = hasBand
+        ? '<div class="band-meter" title="下轨 ' + escapeHtml(fmtNum(floor, 2)) + ' · 现价 ' + escapeHtml(fmtNum(price, 2)) + ' · 上轨 ' + escapeHtml(fmtNum(ceiling, 2)) + '">' +
+          '<span class="band-dot" style="left:' + (band.position * 100).toFixed(2) + '%"></span></div>'
+        : '<div class="band-meter band-free" title="自由成本加成：无成本/价格带">自由定价</div>';
+      var nums = hasBand
+        ? '<span class="band-nums"><span class="floor">' + fmtNum(floor, 2) + '</span> · <strong>' +
+          fmtNum(price, 2) + '</strong>' + badge + ' · <span class="ceil">' + fmtNum(ceiling, 2) + '</span></span>'
+        : '<span class="band-nums">无硬边界 · <strong>' + fmtNum(price, 2) + '</strong></span>';
       return '<div class="band-row clickable-row" data-factory-good="' + escapeHtml(good.id) +
         '" tabindex="0" title="点击查看工厂面板">' +
         '<span class="band-name" title="' + escapeHtml(good.id) + '">' + goodIcon(good.id, "row-icon") +
-        '<span>' + escapeHtml(good.label) + '</span></span>' +
-        '<div class="band-meter" title="下轨 ' + escapeHtml(fmtNum(floor, 2)) + ' · 现价 ' + escapeHtml(fmtNum(price, 2)) + ' · 上轨 ' + escapeHtml(fmtNum(ceiling, 2)) + '">' +
-        '<span class="band-dot" style="left:' + (band.position * 100).toFixed(2) + '%"></span></div>' +
-        '<span class="band-nums"><span class="floor">' + fmtNum(floor, 2) + '</span> · <strong>' +
-        fmtNum(price, 2) + '</strong>' + badge + ' · <span class="ceil">' + fmtNum(ceiling, 2) + '</span></span>' +
+        '<span>' + escapeHtml(good.label) + '</span></span>' + meter + nums +
         '</div>';
     }).join("");
     return '<div class="band-list">' + rows + '</div>' +
@@ -2486,7 +2499,14 @@
       panel("银行资产负债表", "BANK", "现金、贷款、存款、权益与坏账", renderBankTable(index), false),
       panel("政府预算", "GOVERNMENT", "税收、转移、支出、赤字、债务、央行货币", renderGovernmentTable(index), false),
       panel("库存", "INVENTORY", "库存量、需求和覆盖月数", renderInventoryTable(index), false),
-      panel("价格带上下轨", "PRICE BAND", "现价在下轨与上轨之间的位置", renderBandTable(index), false),
+      panel(
+        regimeMeta().price_regime === "free" ? "价格机制（自由定价）" : "价格带上下轨",
+        "PRICE BAND",
+        regimeMeta().price_regime === "free"
+          ? "自由成本加成：不设成本/价格带，只显示现价"
+          : "现价在下轨与上轨之间的位置",
+        renderBandTable(index), false
+      ),
       panel("三制度对比 · 同一月份", "REGIME COMPARE", "三种制度在同一月份的真实输出；点击行切换制度", renderComparisonTable(index), true),
       panel("异常与提示", "ISSUES", "引擎告警与账户一致性检查", renderIssues(index), true)
     ].join("");

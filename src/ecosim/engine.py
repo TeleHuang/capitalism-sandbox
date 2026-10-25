@@ -136,11 +136,13 @@ class Engine:
         self.government: Optional[Government] = None
         # 古典剧本允许工资低于制度性生存线；Keynesian/MMT 保持最低工资。
         self.wage_floor_scale: float = 1.0
-        # "band" = 参考价 + 成本价格带（默认）；
-        # "markup" = 自由成本加成（实验，固定篮子下易崩溃）；
-        # "markup_soft" = 成本加成目标价 + 参考价软走廊（0.85–1.15×ref）；
+        # 低层 Engine 默认 band 仅用于手工单测；用户剧本/CLI/驾驶舱的
+        # ScenarioConfig 默认是 "free"。
         # "free" = V0.6 成本加成 + 需求/供给 + 成交价锚定；无成本带，
-        #          只有绝对安全轨 [PRICE_FLOOR, 20×初始价]。
+        #          只有内部数值夹紧 [PRICE_FLOOR, 20×初始价]。
+        # "band" = 参考价 + 成本价格带（旧制度）；
+        # "markup_soft" = 成本加成目标价 + 参考价软走廊；
+        # "markup" = 旧自由 markup 实验。
         self.price_regime: str = "band"
         # "geary" = 收入依赖的 Stone-Geary 需求（V0.6 默认）；
         # "les" = 旧的 Stone-Geary 价格弹性实验；"fixed" = 固定温饱篮子。
@@ -1293,11 +1295,11 @@ class Engine:
         # 价格制度以 Engine 为准；每步同步一次，允许运行时切换和测试。
         self.market.price_regime = self.price_regime
         if self.price_regime == "free":
+            # 自由价格制度不向 UI/统计暴露任何成本/绝对价格带；
+            # `_update_free_price` 内部只做 PRICE_FLOOR/20× 数值夹紧。
             for good in Good:
-                self.market.floors[good] = PRICE_FLOOR
-                self.market.ceilings[good] = (
-                    INITIAL_PRICES[good] * FREE_PRICE_CAP_MULT
-                )
+                self.market.floors.pop(good, None)
+                self.market.ceilings.pop(good, None)
             costs: Dict[Good, List[float]] = {g: [] for g in Good}
             markups: Dict[Good, List[float]] = {g: [] for g in Good}
             for enterprise in self.active_enterprises():
