@@ -211,14 +211,22 @@ class InvariantTests(unittest.TestCase):
             )
 
     def test_bank_loans_equal_enterprise_debt(self):
-        # 古典 60 月内可能还没有企业债务（0=0 仍应成立）；Keynesian/MMT
+        # 古典 60 月内可能还没有企业债务（0=0 仍应成立）；Keynesian
         # 有银行中介，必须出现正债务才能证明测试不是空转。
-        for regime in ("keynesian", "mmt"):
-            self.assertTrue(
-                self.runs[regime].saw_positive_debt,
-                msg=f"{regime} 60 月内没有出现企业债务，测试不具区分度",
-            )
-        for regime, run in self.runs.items():
+        self.assertTrue(
+            self.runs["keynesian"].saw_positive_debt,
+            msg="keynesian 60 月内没有出现企业债务，测试不具区分度",
+        )
+        # 家庭农场不再为“给自己发工资”借债后，MMT 前 60 月可能完全
+        # 没有企业债务；用 240 月确认债务路径会出现，避免恒等式空转。
+        long_mmt = InvariantRun("mmt", months=240)
+        self.assertTrue(
+            long_mmt.saw_positive_debt,
+            msg="mmt 240 月内没有出现企业债务，测试不具区分度",
+        )
+        runs = dict(self.runs)
+        runs["mmt_240"] = long_mmt
+        for regime, run in runs.items():
             self.assertEqual(
                 run.violations["loans"],
                 [],

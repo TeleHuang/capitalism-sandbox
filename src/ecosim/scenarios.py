@@ -294,7 +294,9 @@ def build_scenario_1(
             modernization_capable=False,
         )
         worker.employer_id = enterprise.id
-        worker.wage = WAGE_BASE
+        # 自耕农所有者是剩余索取者，不是雇员：工资保持 0，
+        # 经营所得由 `_finance` 的 payout 发放。
+        worker.wage = 0.0
         worker.is_owner_operator = True
         worker.land_owned = 10.0
         enterprise.workers.append(worker.id)

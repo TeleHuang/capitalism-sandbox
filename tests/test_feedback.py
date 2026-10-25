@@ -97,6 +97,9 @@ class FeedbackTests(unittest.TestCase):
             for enterprise in engine.active_enterprises(Industry.AGRICULTURE)
             if enterprise.is_household
         )
+        # 本测试只验证“土地不计折旧”，与家庭经营所得 payout 无关。
+        # 关闭 household 分支，避免 payout 按设计改变 last_profit。
+        farm.is_household = False
         farm.month_revenue = 100.0
         farm.month_wages = 10.0
         farm.month_interest = 0.0

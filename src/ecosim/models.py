@@ -146,6 +146,9 @@ class Enterprise:
     last_wages: float = 0.0
     last_interest: float = 0.0
     last_profit: float = 0.0
+    # 家庭企业经营所得 payout（自耕农/自雇摊主的劳动收入）。
+    # 它不是工资，也不是资本利润；`last_profit` 已扣除这部分。
+    last_operating_payout: float = 0.0
     last_sales: Dict[Good, float] = field(default_factory=empty_goods)
 
     month_revenue: float = 0.0
@@ -173,6 +176,7 @@ class Enterprise:
         self.last_sales = empty_goods()
         self.last_output = 0.0
         self.last_input_used = {}
+        self.last_operating_payout = 0.0
 
 
 @dataclass

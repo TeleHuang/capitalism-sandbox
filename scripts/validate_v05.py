@@ -120,9 +120,28 @@ def run_one(
         "money_drift": money_drift,
         "gold_regime": name in GOLD_REGIMES,
         "profit_rate": final["profit_rate"],
+        "all_profit_rate": final["all_profit_rate"],
+        "household_profit": final["household_profit"],
+        # 家庭经营所得（自耕农/自雇摊主的劳动收入）与资本利润分开报告。
+        "household_operating_income": final.get(
+            "household_operating_income", 0.0
+        ),
         "unemployment_rate": final["unemployment_rate"],
         "food_price": final["prices"]["food"],
+        "food_output_final": final["food_output"],
+        "food_output_avg_last12": sum(
+            stat["food_output"] for stat in stats[-12:]
+        ) / max(1, len(stats[-12:])),
+        "food_supply_final": final["supply"]["food"],
+        "food_demand_final": final["demand"]["food"],
         "food_reserve": final["food_reserve"],
+        "household_farms": final["household_farms"],
+        "household_farm_liquidations_total": final.get(
+            "household_farm_liquidations_total"
+        ),
+        "capitalist_farms": final["capitalist_farms"],
+        "estate_land": final["estate_land"],
+        "smallholder_land": final["smallholder_land"],
         "finite_stats": all(
             _finite(value)
             for key, value in final.items()

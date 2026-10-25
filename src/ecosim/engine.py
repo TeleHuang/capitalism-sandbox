@@ -29,6 +29,7 @@ from .config import (
     FERTILIZER_PER_MU,
     FOOD_PER_WORKER,
     FOOD_RELIEF_BUFFER_MONTHS,
+    HOUSEHOLD_FARM_RESERVE,
     HOUSING_PER_WORKER,
     INITIAL_LAND_PRICE,
     INITIAL_PRICES,
@@ -140,6 +141,9 @@ class Engine:
         self._food_relief_this_month = 0.0
         self._food_relief_shortfall = 0.0
         self._food_levy_this_month = 0.0
+        # 家庭农场破产清算计数（验证用）：月流量 + 累计。
+        self._household_farm_liquidations_this_month = 0
+        self.household_farm_liquidations_total = 0
         self.production_month: Dict[Good, float] = {g: 0.0 for g in Good}
         self._next_worker = 0
         self._next_enterprise = 0
@@ -172,6 +176,22 @@ class Engine:
             and not self.workers[worker_id].is_child
             and not self.workers[worker_id].retired
         ]
+
+    @staticmethod
+    def _is_household_farm(enterprise: Enterprise) -> bool:
+        return (
+            enterprise.is_household
+            and enterprise.industry == Industry.AGRICULTURE
+        )
+
+    @classmethod
+    def _is_household_farm_owner(
+        cls, enterprise: Enterprise, worker: Worker
+    ) -> bool:
+        """自耕农所有者是剩余索取者，不是雇员。"""
+        return cls._is_household_farm(enterprise) and (
+            worker.is_owner_operator or worker.id == enterprise.owner_id
+        )
 
     def sector_params(self, industry: Industry):
         return SECTOR_PARAMS[industry]
@@ -465,6 +485,7 @@ class Engine:
         self._food_relief_this_month = 0.0
         self._food_relief_shortfall = 0.0
         self._food_levy_this_month = 0.0
+        self._household_farm_liquidations_this_month = 0
         self._warnings = []
         self.production_month = {g: 0.0 for g in Good}
         for enterprise in self.enterprises.values():
@@ -999,9 +1020,13 @@ class Engine:
                 # 粮食安全溢价：食品库存低于 3 个月时，农场优先留住工人。
                 offer = min(offer * 1.30, WAGE_BASE * 5.0)
             offers[enterprise.id] = offer
-            # 现有员工按企业当前工资报价支付。
+            # 现有员工按企业当前工资报价支付。自耕农所有者例外：
+            # 他是剩余索取者，wage 必须保持 0，收入只走经营所得 payout。
             for worker in workers:
-                worker.wage = offer
+                if self._is_household_farm_owner(enterprise, worker):
+                    worker.wage = 0.0
+                else:
+                    worker.wage = offer
                 worker.hours = worker.choose_hours(prices)
                 worker.industry = enterprise.industry
             vacancies[enterprise.id] = max(0, target - len(workers))
@@ -1171,6 +1196,22 @@ class Engine:
             good = SECTOR_PARAMS[enterprise.industry].output
             workers = self.enterprise_workers(enterprise)
             cost = unit_cost(enterprise, prices, workers, self.land.price)
+            if self._is_household_farm(enterprise):
+                # 自耕农不领工资，但其自有劳动仍有机会成本。价格带用
+                # WAGE_BASE 作为影子工资，避免零现金成本把粮食价格带
+                # 压塌、进而让农机/化肥投资信号失真；该影子成本
+                # 不进入工资账单、利润表或任何现金转移。
+                owner_labor = sum(
+                    worker.effective_labor
+                    for worker in workers
+                    if self._is_household_farm_owner(enterprise, worker)
+                )
+                if owner_labor > 0 and enterprise.last_output > 1e-9:
+                    cost += (
+                        owner_labor
+                        * WAGE_BASE
+                        / enterprise.last_output
+                    )
             if cost > 1e-6:
                 by_good[good].append(cost)
         for good, costs in by_good.items():
@@ -1214,7 +1255,14 @@ class Engine:
             gov.pension_tax_rate if gov is not None else 0.0
         )
         for enterprise in self.active_enterprises():
-            workers = self.enterprise_workers(enterprise)
+            # 自耕农所有者不是雇员：其收入在 `_finance` 按经营所得
+            # payout 发放。这里必须把他排除在工资账单和支付循环之外，
+            # 否则农场会为“给自己发工资”而垫资/借债并最终破产。
+            workers = [
+                worker
+                for worker in self.enterprise_workers(enterprise)
+                if not self._is_household_farm_owner(enterprise, worker)
+            ]
             bill = sum(w.wage * w.effective_labor for w in workers)
             if bill <= 1e-9:
                 continue
@@ -2138,6 +2186,8 @@ class Engine:
     # ------------------------------------------------------------------
     def _finance(self) -> None:
         prices = self.market.reference_prices
+        gov = self.government
+        pension_rate = gov.pension_tax_rate if gov is not None else 0.0
         for enterprise in list(self.active_enterprises()):
             self.bank.charge_interest(enterprise)
             workers = self.enterprise_workers(enterprise)
@@ -2167,6 +2217,7 @@ class Engine:
             if enterprise.is_household and enterprise.industry == Industry.SERVICE:
                 # 自雇摊主不是雇员：当月经营现金在扣除少量周转金后
                 # 直接成为家庭收入，不经过工资下限，也不形成资本回报。
+                payout = 0.0
                 owner = self.workers.get(enterprise.owner_id)
                 if owner is not None and owner.alive:
                     payout = max(0.0, enterprise.cash - SERVICE_FIRM_RESERVE)
@@ -2174,13 +2225,39 @@ class Engine:
                         enterprise.cash -= payout
                         owner.cash += payout
                         enterprise.last_profit -= payout
+                enterprise.last_operating_payout = payout
                 if enterprise.month_revenue <= 1e-9:
                     enterprise.service_idle_months += 1
                 else:
                     enterprise.service_idle_months = 0
 
+            if self._is_household_farm(enterprise):
+                # 自耕农所有者同样是剩余索取者：扣除周转金后的经营现金
+                # 作为家庭经营所得，不是工资，也不是资本利润。
+                # PAYG 缴费按经营所得代扣，保持与工资劳动者相同的费率；
+                # 这样 owner.wage=0 不会让自耕农逃避养老金缴费。
+                payout = 0.0
+                owner = self.workers.get(enterprise.owner_id)
+                if owner is not None and owner.alive:
+                    payout = max(
+                        0.0, enterprise.cash - HOUSEHOLD_FARM_RESERVE
+                    )
+                    if payout > 0:
+                        contribution = 0.0
+                        if pension_rate > 0 and gov is not None:
+                            contribution = payout * pension_rate
+                            gov.cash += contribution
+                            gov.pension_fund += contribution
+                            gov.pension_contributions += contribution
+                            gov.pension_revenue += contribution
+                        enterprise.cash -= payout
+                        owner.cash += payout - contribution
+                        enterprise.last_profit -= payout
+                enterprise.last_operating_payout = payout
+
             if (
-                enterprise.last_profit > 0
+                not self._is_household_farm(enterprise)
+                and enterprise.last_profit > 0
                 and enterprise.cash > wage_bill * 3.0 + 100.0
             ):
                 dividend = min(
@@ -2211,6 +2288,11 @@ class Engine:
 
     def _liquidate(self, enterprise: Enterprise) -> None:
         enterprise.active = False
+        # 仅用于验证：家庭农场不应因“给自己发工资”而破产清算。
+        # 土地市场上的自愿卖地走 `_remove_smallholder`，不计入这里。
+        if self._is_household_farm(enterprise):
+            self._household_farm_liquidations_this_month += 1
+            self.household_farm_liquidations_total += 1
         for worker_id in list(enterprise.workers):
             worker = self.workers.get(worker_id)
             if worker:
@@ -2384,7 +2466,8 @@ class Engine:
         heir.is_owner_operator = True
         heir.industry = enterprise.industry
         heir.land_owned = own_mu
-        heir.wage = WAGE_BASE
+        # 继承人同样只是剩余索取者，不领工资。
+        heir.wage = 0.0
         heir.hours = 16
 
     def _settle_estate(
@@ -2638,6 +2721,7 @@ class Engine:
         capitalist_profit = 0.0
         household_capital = 0.0
         household_profit = 0.0
+        household_operating_income = 0.0
         for enterprise in active_enterprises:
             enterprise_capital = (
                 capital_value(enterprise, prices, self.land.price)
@@ -2655,11 +2739,14 @@ class Engine:
             if enterprise.is_household:
                 household_capital += enterprise_capital
                 household_profit += enterprise.last_profit
+                household_operating_income += enterprise.last_operating_payout
             else:
                 capitalist_capital += enterprise_capital
                 capitalist_profit += enterprise.last_profit
         # “全社会利润率”只统计资本主义企业（非 household）：
         # 家庭农场/服务自雇的所有者劳动收入不是资本回报，混入会系统性压低利润率。
+        # 家庭企业的 last_profit 已扣除经营所得 payout，因此 household_profit
+        # 是剩余会计利润；所有者劳动收入在 household_operating_income 单列。
         profit_rate = (
             capitalist_profit / capitalist_capital
             if capitalist_capital > 0
@@ -2930,6 +3017,13 @@ class Engine:
             "capitalist_profit": capitalist_profit,
             "household_capital": household_capital,
             "household_profit": household_profit,
+            "household_operating_income": household_operating_income,
+            "household_farm_liquidations": (
+                self._household_farm_liquidations_this_month
+            ),
+            "household_farm_liquidations_total": (
+                self.household_farm_liquidations_total
+            ),
             "ag_productivity": ag_productivity,
             "food_output": food_output,
             "prices": {g.value: prices[g] for g in Good},

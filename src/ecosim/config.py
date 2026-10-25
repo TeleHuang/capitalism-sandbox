@@ -91,6 +91,10 @@ DIVIDEND_PAYOUT = 0.50
 MAX_SERVICE_ENTRIES_PER_MONTH = 25
 SERVICE_ENTRY_MIN_REVENUE = 5.0      # 每单位服务收入低于此值则不再进入
 SERVICE_FIRM_RESERVE = 2.0           # 自雇家庭保留的周转现金
+# 家庭农场保留的周转现金（元）：覆盖无雇工、无现代化投入的小农的
+# 工具/交易摩擦，约为初始营运资金的一半。超出部分作为家庭经营所得
+# 在 `_finance` 中支付给自耕农，而不是工资或资本利润。
+HOUSEHOLD_FARM_RESERVE = 50.0
 SERVICE_IDLE_EXIT_MONTHS = 6         # 连续无销售额月数，退回失业/资产池
 
 # 土地市场
