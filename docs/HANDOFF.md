@@ -11,9 +11,10 @@
 - 最新提交：见 `git log -1`（V0.5 人口/代际/退休金 + v0.5.1 修复 +
   v0.5.2 家庭农场剩余收入修复 + 文档）
 - Python 版本：0.5.0
-- 测试：95 个全绿（88 + 7 家庭农场回归；分支 1049.3s，
-  主线合并后 1403.3s，seed=1）；D2 新增 2 个 dashboard tests 单独通过
-  （97 total targeted；D2 为 UI/API-only，未重跑 23 分钟全量）。
+- 测试：98 tests；默认快速套件 **123s**（8 个 `@slow` skipped，全部 OK）；
+  240/600/1200 月长程用 `ECOSIM_SLOW_TESTS=1` 或
+  `scripts/validate_v05.py`，不再每次开发都跑。性能：240 月约 15–16s，
+  60 月约 4s（优化前 131s / 21.5s）。
 - UI：`python scripts/serve_dashboard.py --port 8765` → `http://127.0.0.1:8765`
   （V0.5 人口面板已合并，`3833c23`；截图
   `web/screenshots/v05-demography-keynesian-60.png`）
