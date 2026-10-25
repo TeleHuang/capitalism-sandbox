@@ -114,10 +114,16 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 集成规则：子代理在各自 worktree 提交；主代理审查 diff、跑测试、
 cherry-pick 到 `v0.4-integration`；冲突时以测试和用户可见指标为准。
 
-**UI 方向（用户确认）**：前后端分离，不为每个版本生成巨大自包含 HTML。
-`scripts/serve_dashboard.py` 用 Python 标准库 `http.server` 提供
-`/api/run` 和 `/api/compare`；`web/v04/index.html` + `app.js` 通过 fetch 渲染。
-启动后浏览器打开 `http://127.0.0.1:8765`。
+**标准工作流（用户确认，必须遵守）**：
+
+1. **迭代阶段**：Python + 本地 Web UI。`src/ecosim/` 模块低耦合高内聚，
+   方便快速改逻辑；`scripts/serve_dashboard.py` + `web/v04/` 提供诊断界面。
+   JavaScript 也能做类似结构，当前选 Python 是为了迭代速度和可测试性。
+2. **发行阶段**：最终产品是**一个 HTML 文件**，包含全部经济仿真逻辑和
+   UI，电脑双击/手机浏览器直接打开，方便传播；不依赖外部文件/CDN/图片/
+   字体/Python。不要在每次小改动时生成巨大自包含 HTML，发行里程碑统一构建。
+3. Python 是逻辑权威参考；JS 发行版用固定 seed 黄金运行复现关键指标。
+   本地驾驶舱是诊断界面，不是最终发行版。
 
 ## 工作方式
 
