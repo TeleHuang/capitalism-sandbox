@@ -30,6 +30,8 @@
 | `0e15fad` | V0.5.2 家庭农场所有者剩余索取者记账（cherry-pick 自 `fix/household-farm-income` `035c97f`，95 tests） |
 | `3833c23` | V0.5 D2 人口驾驶舱：人口 KPI/金字塔/出生死亡/抚养比/养老金 + API demography |
 | `ca5ebeb` | V0.6 UI：产品图标、工厂点按面板、机制说明（cherry-pick 自 `feature/ui-icons` `b350714`） |
+| `727c388` | V0.6 B：工资—生产率规则、8h/16h、free 成本加成价格（cherry-pick 自 `feature/v06-wage-price` `9fbcb4d`） |
+| `8a9fdd7` | V0.6 A：收入依赖需求、肉类质量阶梯、服务吸收劳动（cherry-pick 自 `feature/v06-demand` `1d3bde4`） |
 
 ## Feature 分支
 
@@ -47,6 +49,8 @@
 | `fix/demography-safety` | `f797b37` | 已合并 | 救济缓冲/政府融资/PAYG 代扣/土地继承/测试强化（主线 `7429a3b`） |
 | `fix/household-farm-income` | `035c97f` | 已合并 | 自耕农剩余索取者记账/经营所得 payout（主线 `0e15fad`） |
 | `feature/price-guidance` | `7c1d949` | 待合并/待组合测试 | opt-in 供求指导价 v1+v2；纯价格仍崩溃，默认 band |
+| `feature/v06-demand` | `1d3bde4` | 已合并 | 收入依赖需求/肉类/服务吸收（主线 `8a9fdd7`） |
+| `feature/v06-wage-price` | `9fbcb4d` | 已合并 | 工资—生产率/8h/16h/free 价格（主线 `727c388`） |
 
 ## UI 启动
 

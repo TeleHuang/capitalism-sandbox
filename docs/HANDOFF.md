@@ -1,17 +1,19 @@
-# V0.5 交接（会话入口）
+# V0.6 交接（会话入口）
 
-> 这是每次会话开始时自动加载的一页交接。详细档案见
-> `docs/WORKSTREAM_V0.5.md`；人口设计与修复见
+> 这是每次会话开始时自动加载的一页交接。V0.6 工作流见
+> `docs/WORKSTREAM_V0.6.md`；V0.5 人口设计见
 > `docs/DEMOGRAPHICS_DESIGN.md`；长程结果见 `docs/VALIDATION_V0.5.md`；
-> 价格指导价见 `docs/decisions/0005-guidance-prices.md`（feature/price-guidance 分支）。
+> 价格指导价见 `docs/decisions/0005-guidance-prices.md`。
+> 标准工作流：Python + 本地 Web UI 迭代，最终发行单文件 HTML
+> （`CLAUDE.md` / `CONTRIBUTING.md`）。
 
 ## 当前基线
 
 - 分支：`v0.4-integration`
-- 最新提交：见 `git log -1`（V0.5 人口/代际/退休金 + v0.5.1 修复 +
-  v0.5.2 家庭农场剩余收入修复 + 文档）
-- Python 版本：0.5.0
-- 测试：98 tests；默认快速套件 **123s**（8 个 `@slow` skipped，全部 OK）；
+- 最新提交：见 `git log -1`（V0.5 人口/退休金 + V0.6 A 需求阶梯 +
+  B 工资—生产率/自由价格 + UI 图标/工厂面板）
+- Python 版本：0.6.0
+- 测试：127 fast tests，默认快速套件 **~97s**（12 个 `@slow` skipped，全部 OK）；
   240/600/1200 月长程用 `ECOSIM_SLOW_TESTS=1` 或
   `scripts/validate_v05.py`，不再每次开发都跑。性能：240 月约 15–16s，
   60 月约 4s（优化前 131s / 21.5s）。
@@ -26,7 +28,26 @@
   优化前约 131 秒 / 21.5 秒（工资报价的 O(n²) 劳动力扫描已缓存）。
   引擎本身没有墙钟/每秒 TIK 节流；UI 是先跑完再显示，不是逐月播放。
 
-## 当前 240 月结果（seed=1，家庭农场修复后）
+## V0.6 A+B 结果（seed=1，240 月）
+
+| 剧本 | 价格制度 | 人口 | 食物占比 | 服务占比 | 失业率 | GDP | 利润率 | CPI |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| classical | band | 1708 | 45.0% | 38.6% | 3.1% | 32,719 | -0.13% | 126.1 |
+| classical | free | 1722 | 49.5% | 36.5% | 20.3% | 23,727 | +0.22% | 90.1 |
+| keynesian | band | 1660 | 40.8% | 44.7% | 0.6% | 59,774 | +0.02% | 172.0 |
+| keynesian | free | 1669 | 40.2% | 40.7% | 1.3% | 50,971 | -0.34% | 166.5 |
+
+- 食物占比从 62.9% 降到 40–49%；服务占比 36–45%；肉类市场存在但工人实际工资
+  仍接近 1 个温饱篮子，工人买肉≈0（高收入 Engel 行为由单测覆盖）。
+- `free` 已删成本上下轨（仅绝对安全轨）；240 月四剧本无饥饿、金本位货币守恒。
+  classical free 失业 20.3% vs band 3.1%，**默认保持 band**；free 仍 opt-in。
+- 价格方向不再统一：classical free CPI 90（通缩）、keynesian free CPI 166（通胀）。
+- 复利年化/过去 12 月利润率已在驾驶舱显示（`profit_rate_annualized`/
+  `profit_rate_annual`）。
+- 分支：`feature/v06-demand` `1d3bde4`、`feature/v06-wage-price` `9fbcb4d`；
+  主线合并 `8a9fdd7` / `727c388`。
+
+## V0.5 历史 240 月结果（家庭农场修复后）
 
 | 制度 | 人口 | 饥饿死亡 | 粮食产出/需求（吨/月） | 利润率 | 养老金基金 |
 |---|---:|---:|---:|---:|---:|
@@ -70,23 +91,23 @@
 应补：可开垦土地池、开垦投资（劳动/设备/时间、边际成本递增）、
 estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md`（待建）。
 
-## 下一步优先级
+## 下一步优先级（V0.6）
 
-1. **土地开垦/estate 拍卖（需求缺口，最高优先）**：见上节；
-   直接针对 1200 月古典/Keynesian 剩余饥荒和长期土地约束。
-2. **D4 信贷冲击稳定器**：`docs/CREDIT_BACKSTOP_DESIGN.md` 已设计：
-   wage_arrears、LLR/贴现窗口、食品券、银行冻结规则校准；
-   用 240 月信贷冲击对比死亡/零现金/饥饿。
-3. **价格指导价 v2 + 人口/救济组合**：`feature/price-guidance` 已实现
-   opt-in `guidance`（ADR 0005，v2 `7c1d949`，85 tests）；纯价格变体
-   仍崩溃，家庭农场会计修复后需与人口/食品救济一起重测。
-4. **D2 驾驶舱人口面板（已完成 `3833c23`）**：4 张人口 KPI、人口金字塔、
-   出生/死亡、抚养比、养老金收支、三制度对比人口列；截图
-   `web/screenshots/v05-demography-*.png`。后续可加 1200 月时间轴与
-   detail 视图。
-5. **D3 剧本**：`IRON_AGE`、可选 `NEOLIBERAL`；`LATE_CAPITALISM` 已实现。
-6. **D5 百年仿真/长程修复**：20–100 seeds、长期负利润、剩余古典饥荒。
-7. **HTML 单文件发行版**：本地驾驶舱可用；单文件发行版仍需同步 V0.5。
+1. **A2 耐用品/生命周期（最高优先）**：衣服 60 月、住房 600 月（维修/摊销）、
+   农机/车 120 月；汽车/住房存量；报废设备/车 → 废钢（价格锚定铁矿，
+   钢厂用废钢+半量煤炭）；土地兼并/超大型农机，小农机闲置/出售。
+2. **C 银行/信贷/MMT**：贷款创造存款、准备金/资本约束、信用审查/风险溢价、
+   央行通胀/利率反应函数；金本位准备金率扩张信用。
+3. **D 土地开垦/estate**：开局缓慢开垦（不用粮价 180 阈值）；合并
+   `feature/land-reclamation`，estate 拍卖/再分配。
+4. **E 单文件 HTML 发行版**：玩家机制 UI（产品图标、工厂面板、2^N、
+   矿类/土地/消费/人口说明），全部逻辑/资源内联；当前 `web/v04` 只是诊断版。
+5. **重新评估 `price_regime="free"` 默认**：A2/C 完成后看 classical 失业/
+   价格方向；当前默认仍 band。
+6. **D3 剧本/长程**：`IRON_AGE`、`NEOLIBERAL`；20–100 seeds、
+   1200 月、长期负利润与剩余古典饥荒。
+7. **D4 信贷冲击稳定器**：`docs/CREDIT_BACKSTOP_DESIGN.md` 的
+   wage_arrears/LLR/食品券/冻结规则校准，与 C 一起做。
 
 ## 并行版本树（进行中）
 
@@ -100,8 +121,8 @@ estate 拍卖/再分配、统计与 UI。详见 `docs/LAND_RECLAMATION_DESIGN.md
 | `fix/household-farm-income` | `.claude/worktrees/household-income` | **已合并** `0e15fad`：自耕农剩余收入/不借债发自己工资 |
 | `feature/land-reclamation` | `.claude/worktrees/land-reclamation` | **未合并** `2f79f0e`：P1–P3 开垦/estate；缺最终全量+600/1200，且触发阈值 180 太高 |
 | `feature/ui-icons` | `.claude/worktrees/ui-icons` | **已合并** `ca5ebeb`：产品图标、工厂面板、机制说明（V0.6 UI） |
-| `feature/v06-demand` | `.claude/worktrees/v06-demand` | **进行中**：收入依赖需求、食品品质/肉类、服务业吸收劳动 |
-| `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **进行中**：生产率工资、8h/16h、删除成本价格带 |
+| `feature/v06-demand` | `.claude/worktrees/v06-demand` | **已合并** `8a9fdd7`：收入依赖需求、肉类/服务吸收 |
+| `feature/v06-wage-price` | `.claude/worktrees/v06-wage-price` | **已合并** `727c388`：生产率工资、8h/16h、free 价格制度 |
 | `feature/ui-cockpit` | `.claude/worktrees/ui-cockpit` | 已合并 `d8cdae7` |
 | `feature/ui-comparison` | `.claude/worktrees/ui-comparison` | 暂停 |
 | `feature/services` | `.claude/worktrees/services` | 已合并 `79d27de` |
