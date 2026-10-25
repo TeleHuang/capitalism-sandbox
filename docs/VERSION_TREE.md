@@ -27,6 +27,7 @@
 | `6e09300` | V0.5 人口/代际/退休金设计草案 |
 | `365aa93` | V0.5 人口/代际/退休金模块（cherry-pick 自 `feature/demography` `263e99f`） |
 | `7429a3b` | V0.5.1 救济/养老金/土地/统计修复（cherry-pick 自 `fix/demography-safety` `f797b37`，88 tests） |
+| `0e15fad` | V0.5.2 家庭农场所有者剩余索取者记账（cherry-pick 自 `fix/household-farm-income` `035c97f`，95 tests） |
 
 ## Feature 分支
 
@@ -42,7 +43,8 @@
 | `feature/validation` | `1891485` | 已合并 | 冲击测试、不变量、验证报告（主线 `0f3888c`） |
 | `feature/demography` | `263e99f` | 已合并 | V0.5 人口/代际/退休金/晚期资本主义（主线 `365aa93`） |
 | `fix/demography-safety` | `f797b37` | 已合并 | 救济缓冲/政府融资/PAYG 代扣/土地继承/测试强化（主线 `7429a3b`） |
-| `feature/price-guidance` | `33ca831` | 进行中 | opt-in 供求指导价 v1（ADR 0005）；v2 库存覆盖月数对比中 |
+| `fix/household-farm-income` | `035c97f` | 已合并 | 自耕农剩余索取者记账/经营所得 payout（主线 `0e15fad`） |
+| `feature/price-guidance` | `7c1d949` | 待合并/待组合测试 | opt-in 供求指导价 v1+v2；纯价格仍崩溃，默认 band |
 
 ## UI 启动
 
