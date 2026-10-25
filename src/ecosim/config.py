@@ -49,7 +49,9 @@ COMFORT_MULTIPLIER = 1.5
 COMFORT_SAVINGS = 60.0
 LEISURE_SAVINGS = 120.0
 
-# 劳动供给：工人从这些工时中选择，工资按工时比例发放。
+# 劳动供给：工人从标准工时的 100%/75%/50% 中选择。
+# V0.6 起，具体档位由 Worker.standard_hours（剧本 work_hours）派生：
+# 16 小时制 -> (16,12,8)；8 小时制 -> (8,6,4)。
 HOURS_OPTIONS = (16, 12, 8)
 DEFAULT_HOURS = 16
 
@@ -69,6 +71,40 @@ WAGE_BASE = 20.0
 WAGE_SEARCH_PREMIUM = 0.08
 WAGE_SWITCH_THRESHOLD = 0.06
 MAX_HIRES_PER_ENTERPRISE_PER_MONTH = 20
+
+# --- V0.6 工资—生产率规则 ------------------------------------------------
+# 工资目标（WAGE_BASE 为基准）：
+#   w_target = WAGE_BASE * A^β * (1+π^e)^α
+#              * (1 + tightness + institutional)
+# 其中 A 是平滑劳动生产率指数，π^e 是月度通胀预期。
+# β 由剧本 wage_productivity_share 给出；α 固定为 1（完全通胀补偿）。
+WAGE_INFLATION_PASS_THROUGH = 1.0
+# 工资向目标调整的月度速度由剧本 wage_adjustment_speed 给出（0.10–0.30）。
+# 劳动市场紧张度/利润分享沿用旧工资曲线的斜率；制度项由
+# wage_bargain_power 放大真实工资追赶与生活成本压力。
+WAGE_TIGHTNESS_SLOPE = 0.5
+WAGE_PROFIT_SLOPE = 0.5
+WAGE_HIRING_PREMIUM = 1.10
+WAGE_CASH_DISCOUNT = 0.95
+WAGE_CAP_MULT = 5.0                 # 绝对名义工资安全上限（WAGE_BASE 的倍数）
+WAGE_CATCHUP_WEIGHT = 0.6           # 制度项中“生产率收益追赶”的权重
+WAGE_COST_OF_LIVING_WEIGHT = 0.4    # 制度项中“生活成本危机”的权重
+WAGE_CATCHUP_CAP = 2.0              # 追赶缺口的最大倍数，防止一步跳涨
+WAGE_INSTITUTIONAL_CAP = 0.50       # 制度项最多 +50%
+# 向下的工资调整可以比向上更快：名义工资向上粘性、向下更能响应失业，
+# 避免一次暂时的高工资把古典经济锁在高失业里。
+WAGE_DOWNWARD_SPEED_MULT = 3.00
+
+# 劳动生产率指数：
+#   实际增加值（按初始价格计） / 就业有效劳动（FTE）
+# 前 PRODUCTIVITY_WARMUP_MONTHS 个月是剧本初始补库存阶段，不用于定基；
+# 第 12 个月的平滑值作为基期 = 1.0，之后才把生产率趋势传递给工资。
+PRODUCTIVITY_WARMUP_MONTHS = 12
+PRODUCTIVITY_SMOOTHING = 0.10
+PRODUCTIVITY_INDEX_MIN = 0.20
+PRODUCTIVITY_INDEX_MAX = 5.00
+INFLATION_OBSERVATION_CAP = 0.20    # 单月观察通胀/通缩的截断（±20%）
+INFLATION_EXPECTATION_SMOOTHING = 0.15
 
 # 资产阶级
 CAPITALIST_CONSUMPTION_RATE = 0.02   # 每月消费现金比例
@@ -109,6 +145,35 @@ TARGET_CAPITALIST_FARM_MU = 100.0
 # 参考价试探过程
 PRICE_STEP = 0.05
 PRICE_FLOOR = 0.01
+
+# --- V0.6 自由成本加成价格制度（price_regime="free"） -------------------
+# 目标价：p* = (1 + markup) * unit_cost，markup 随库存/未成交需求慢速调整；
+# 再叠加成交价锚定和参考价 ±3% 的可成交走廊。没有成本下限/上限：
+# 低于成本的价格、亏损、减产和退出都是正常信号。只保留绝对数值安全轨
+# （PRICE_FLOOR 与 20×初始价），防止薄市场把价格推到 0 或无穷大。
+FREE_PRICE_CAP_MULT = 20.0          # 绝对安全上限：初始价的 20 倍
+FREE_MARKUP_INIT_MIN = 0.00         # 首次定价时由 ref/cost-1 校准 markup
+FREE_MARKUP_INIT_MAX = 3.00         # 初始价格结构可含 0–300% 加成
+FREE_MARKUP_MIN = 0.00
+FREE_MARKUP_MAX = 3.00
+FREE_MARKUP_SPEED = 0.02            # 每月 markup 调整速度
+FREE_DEMAND_SLOPE = 0.35            # 未成交需求对目标价的加成
+FREE_GLUT_SLOPE = 0.20              # 未售出库存对目标价的折价
+FREE_DEMAND_FACTOR_MIN = 0.85
+FREE_DEMAND_FACTOR_MAX = 1.20
+FREE_OBSERVED_WEIGHT = 0.25         # 企业报价中上月成交价的锚定权重
+FREE_REF_CORRIDOR = 0.03            # 卖价相对参考价的 ±3% 可成交走廊
+FREE_COST_ANCHOR_WEIGHT = 0.45      # 参考价更新中的成本加成锚权重
+FREE_OBSERVED_ANCHOR_WEIGHT = 0.35  # 参考价更新中的成交价锚权重
+FREE_REF_ANCHOR_WEIGHT = 0.20       # 参考价更新中的惯性权重
+FREE_SHORTAGE_COVERAGE = 1.0        # 可售库存 <1 个月视为短缺
+FREE_GLUT_COVERAGE = 3.0            # 可售库存 >3 个月且无未成交买单才降价
+FREE_SHORTAGE_STEP_MIN = 0.04       # 短缺最小月涨幅
+FREE_SHORTAGE_STEP_MAX = 0.25       # 短缺最大月涨幅
+FREE_SHORTAGE_SLOPE = 0.50
+FREE_GLUT_STEP_MIN = 0.02           # 过剩最小月跌幅（比短缺慢）
+FREE_GLUT_STEP_MAX = 0.12
+FREE_GLUT_SLOPE = 0.10
 
 BANK_CASH = 100_000.0
 BANK_INTEREST_RATE = 0.01

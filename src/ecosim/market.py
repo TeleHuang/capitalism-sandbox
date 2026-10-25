@@ -3,7 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-from .config import PRICE_FLOOR, PRICE_STEP, SECTOR_PARAMS
+from .config import (
+    FREE_COST_ANCHOR_WEIGHT,
+    FREE_GLUT_COVERAGE,
+    FREE_GLUT_SLOPE,
+    FREE_GLUT_STEP_MAX,
+    FREE_GLUT_STEP_MIN,
+    FREE_OBSERVED_ANCHOR_WEIGHT,
+    FREE_PRICE_CAP_MULT,
+    FREE_REF_ANCHOR_WEIGHT,
+    FREE_SHORTAGE_COVERAGE,
+    FREE_SHORTAGE_SLOPE,
+    FREE_SHORTAGE_STEP_MAX,
+    FREE_SHORTAGE_STEP_MIN,
+    INITIAL_PRICES,
+    PRICE_FLOOR,
+    PRICE_STEP,
+    SECTOR_PARAMS,
+)
 from .enums import Good
 from .government import Government
 from .models import (
@@ -44,12 +61,19 @@ class Market:
 
     def __init__(self, prices: Dict[Good, float]):
         self.reference_prices = dict(prices)
+        # 价格制度由 Engine 每月同步；只有 "free" 会改变参考价路径。
+        self.price_regime = "band"
+        # free 制度的价格锚：由 Engine 在撮合前按行业单位成本/markup
+        # 中位数写入。成本锚只用于定价，不构成价格下限。
+        self.cost_anchors: Dict[Good, float] = {}
+        self.markup_anchors: Dict[Good, float] = {}
         self.orders_buy: Dict[Good, List[Order]] = {g: [] for g in Good}
         self.orders_sell: Dict[Good, List[Order]] = {g: [] for g in Good}
         self.history: Dict[Good, Dict[str, float]] = {
             g: {
                 "volume": 0.0,
                 "price": self.reference_prices[g],
+                "observed": 0.0,
                 "demand": 0.0,
                 "supply": 0.0,
                 "unsold": 0.0,
@@ -157,10 +181,12 @@ class Market:
                 if s.quantity <= 1e-9:
                     sells.pop(0)
 
+            observed = value / volume if volume > 1e-9 else 0.0
             self._update_reference_price(good, demand, supply, volume, value, buys, sells)
             self.history[good] = {
                 "volume": volume,
                 "price": self.reference_prices[good],
+                "observed": observed,
                 "demand": demand,
                 "supply": supply,
                 "unsold": sum(o.quantity for o in sells),
@@ -180,6 +206,12 @@ class Market:
         buys: List[Order],
         sells: List[Order],
     ) -> None:
+        if self.price_regime == "free":
+            self._update_free_price(
+                good, demand, supply, volume, value, buys, sells
+            )
+            return
+
         old = self.reference_prices[good]
         if volume > 1e-9:
             observed = value / volume
@@ -197,6 +229,90 @@ class Market:
         elif supply > 1e-9 and demand <= 1e-9:
             new *= 1.0 - PRICE_STEP
 
+        floor = self.floors.get(good)
+        ceiling = self.ceilings.get(good)
+        if floor is not None:
+            new = max(new, floor)
+        if ceiling is not None:
+            new = min(new, ceiling)
+        self.reference_prices[good] = max(PRICE_FLOOR, new)
+
+    def _update_free_price(
+        self,
+        good: Good,
+        demand: float,
+        supply: float,
+        volume: float,
+        value: float,
+        buys: List[Order],
+        sells: List[Order],
+    ) -> None:
+        """自由成本加成制度的参考价路径。
+
+        ``new = w_cost × (1+markup)×unit_cost + w_obs × 成交价 + w_ref × old``
+        再叠加需求/供给方向调整：
+
+        - 短缺（有未成交买单或可售库存 <1 个月）：每月 +4%..+25%；
+        - 过剩（无未成交买单且可售库存 >3 个月）：每月 -2%..-12%；
+        - 其余：只做成本/成交/惯性混合。
+
+        成本锚是定价信号，不是价格下限：当成本高于参考价时参考价逐步
+        上调，成本低于参考价时逐步下调；企业可以在亏损价格下销售、
+        减产或退出。最后只夹在绝对安全轨内。
+        """
+        old = self.reference_prices[good]
+        observed = value / volume if volume > 1e-9 else 0.0
+        cost = self.cost_anchors.get(good, 0.0)
+        markup = self.markup_anchors.get(good, 0.15)
+        unmet = sum(order.quantity for order in buys)
+        unsold = sum(order.quantity for order in sells)
+        coverage = (volume + unsold) / max(demand, 1e-9)
+
+        if demand <= 1e-9 and coverage <= 0.0:
+            new = old
+        else:
+            if cost > 1e-9:
+                cost_target = cost * (1.0 + markup)
+                observed_anchor = observed if observed > 0 else old
+                new = (
+                    FREE_COST_ANCHOR_WEIGHT * cost_target
+                    + FREE_OBSERVED_ANCHOR_WEIGHT * observed_anchor
+                    + FREE_REF_ANCHOR_WEIGHT * old
+                )
+            elif observed > 0:
+                new = (
+                    (1.0 - FREE_REF_ANCHOR_WEIGHT) * observed
+                    + FREE_REF_ANCHOR_WEIGHT * old
+                )
+            else:
+                new = old
+
+            shortage = unmet / max(demand, 1e-9)
+            if unmet > 1e-9 or (
+                demand > 1e-9 and coverage < FREE_SHORTAGE_COVERAGE
+            ):
+                strength = max(
+                    min(1.0, shortage),
+                    max(0.0, 1.0 - coverage),
+                )
+                step = min(
+                    FREE_SHORTAGE_STEP_MAX,
+                    FREE_SHORTAGE_STEP_MIN + FREE_SHORTAGE_SLOPE * strength,
+                )
+                new *= 1.0 + step
+            elif unmet <= 1e-9 and coverage > FREE_GLUT_COVERAGE:
+                strength = min(
+                    1.0,
+                    (coverage - FREE_GLUT_COVERAGE) / FREE_GLUT_COVERAGE,
+                )
+                step = min(
+                    FREE_GLUT_STEP_MAX,
+                    FREE_GLUT_STEP_MIN + FREE_GLUT_SLOPE * strength,
+                )
+                new *= 1.0 - step
+
+        cap = INITIAL_PRICES[good] * FREE_PRICE_CAP_MULT
+        new = min(max(PRICE_FLOOR, new), cap)
         floor = self.floors.get(good)
         ceiling = self.ceilings.get(good)
         if floor is not None:

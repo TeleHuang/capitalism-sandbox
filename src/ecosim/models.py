@@ -6,7 +6,6 @@ from typing import Dict, List, Optional
 from .config import (
     COMFORT_SAVINGS,
     FOOD_PER_WORKER,
-    HOURS_OPTIONS,
     LEISURE_SAVINGS,
 )
 from .enums import Good, Industry
@@ -29,6 +28,11 @@ class Worker:
     employer_id: Optional[str] = None
     wage: float = 0.0
     hours: int = 16
+    # 制度性标准工时（剧本 work_hours）：16（古典/维多利亚）或 8（Fordist/
+    # Keynesian/MMT/晚期）。有效劳动按“实际工时 / 标准工时”计，因此一个
+    # 按标准工时工作的工人贡献 1.0 个 FTE；短工时是制度/闲暇维度，产能
+    # 以“标准全职工人”为口径，不在本版本里额外模拟小时产出损失。
+    standard_hours: int = 16
     alive: bool = True
     hunger_months: int = 0
     ui_months: int = 0
@@ -56,7 +60,8 @@ class Worker:
 
     @property
     def effective_labor(self) -> float:
-        return self.hours / 16.0
+        standard = max(1, int(self.standard_hours or 16))
+        return max(0.0, self.hours) / standard
 
     @property
     def employed(self) -> bool:
@@ -76,28 +81,35 @@ class Worker:
         """PRD 的劳动力再生产阶梯，这里做刻意简化。
 
         工人先确保储蓄；有了一定缓冲后，会用收入交换闲暇。
-        价格是保留工资的一部分，因此食品昂贵时工人仍会保持 16 小时工作。
+        价格是保留工资的一部分，因此食品昂贵时工人仍会保持标准工时。
+        工时档位由制度性标准工时派生（16h -> 16/12/8；8h -> 8/6/4），
+        短工时按 `effective_labor = hours / standard_hours` 折算。
         """
         if self.is_child or self.retired:
             return 0
+        standard = max(1, int(self.standard_hours or 16))
+        full = standard
+        mid = max(1, int(round(standard * 0.75)))
+        low = max(1, int(round(standard * 0.50)))
+        options = (full, mid, low)
         basket = (
             FOOD_PER_WORKER * prices[Good.FOOD]
             + prices[Good.CLOTH]
             + 0.2 * prices[Good.BUILDING]
         )
-        if self.hours in HOURS_OPTIONS:
+        if self.hours in options:
             current = self.hours
         else:
-            current = 16
+            current = full
         # 饥饿优先于闲暇：没有食物的工人会全职工作。
         if self.food + 1e-9 < 0.10 or self.living_standard in ("survival", "subsistence"):
-            return 16
-        if self.cash >= LEISURE_SAVINGS and current > 8:
-            return 8
-        if self.cash >= COMFORT_SAVINGS and current > 12:
-            return 12
-        if self.cash < basket * 2.0 and current != 16:
-            return 16
+            return full
+        if self.cash >= LEISURE_SAVINGS and current > low:
+            return low
+        if self.cash >= COMFORT_SAVINGS and current > mid:
+            return mid
+        if self.cash < basket * 2.0 and current != full:
+            return full
         return current
 
 
@@ -133,6 +145,16 @@ class Enterprise:
     dormant_months: int = 0
     service_idle_months: int = 0
     replacement_months: int = 0
+
+    # --- V0.6 工资—价格状态 ---
+    # 工资报价的粘性状态：工资目标每月向 w_target 部分调整。只在
+    # 自由成本加成制度下使用 markup_initialized 一次性校准历史 markup；
+    # band/markup_soft 分支保持原有行为。
+    wage_offer: float = 0.0
+    markup_initialized: bool = False
+    # 正常成本加成率（按初始价格结构校准）。free 制度的 markup 围绕
+    # markup_normal 随库存/未成交需求波动，而不是永久棘轮上行。
+    markup_normal: float = 0.15
 
     # 市场 / 会计状态
     ask_prices: Dict[Good, float] = field(default_factory=dict)

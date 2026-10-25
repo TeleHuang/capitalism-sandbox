@@ -6,6 +6,10 @@
 用法：
   python -m unittest discover -s tests -v                 # 快速
   ECOSIM_SLOW_TESTS=1 python -m unittest discover -s tests -v  # 慢速
+
+    from tests._slow import slow
+    @slow
+    def test_long_run(self): ...
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ SLOW_ENABLED = os.environ.get("ECOSIM_SLOW_TESTS", "").strip().lower() in {
     "yes",
     "on",
 }
+# 兼容工资—价格分支使用的命名。
+SLOW_TESTS_ENABLED = SLOW_ENABLED
 
 slow = unittest.skipUnless(
     SLOW_ENABLED,

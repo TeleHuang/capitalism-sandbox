@@ -29,8 +29,15 @@ from .config import (
     FERTILIZER_PER_MU,
     FOOD_PER_WORKER,
     FOOD_RELIEF_BUFFER_MONTHS,
+    FREE_MARKUP_INIT_MAX,
+    FREE_MARKUP_INIT_MIN,
+    FREE_MARKUP_MAX,
+    FREE_MARKUP_MIN,
+    FREE_PRICE_CAP_MULT,
     HOUSEHOLD_FARM_RESERVE,
     HOUSING_PER_WORKER,
+    INFLATION_EXPECTATION_SMOOTHING,
+    INFLATION_OBSERVATION_CAP,
     INITIAL_LAND_PRICE,
     INITIAL_PRICES,
     INVESTMENT_HURDLE,
@@ -39,6 +46,11 @@ from .config import (
     MAX_NEW_FIRMS_PER_TICK,
     MAX_PROJECTS_PER_TICK,
     MAX_SERVICE_ENTRIES_PER_MONTH,
+    PRICE_FLOOR,
+    PRODUCTIVITY_INDEX_MAX,
+    PRODUCTIVITY_INDEX_MIN,
+    PRODUCTIVITY_SMOOTHING,
+    PRODUCTIVITY_WARMUP_MONTHS,
     PROJECT_TIMEOUT_MONTHS,
     SECTOR_PARAMS,
     SERVICE_ENTRY_MIN_REVENUE,
@@ -56,9 +68,12 @@ from .decisions import (
     enterprise_ask_price,
     enterprise_wage_offer,
     input_needs,
+    normal_unit_cost,
+    pricing_unit_cost,
     production_plan,
     should_invest,
     should_switch,
+    subsistence_cost,
     wants_fertilizer,
     wage_floor,
 )
@@ -86,7 +101,6 @@ from .production import (
     inventory_value,
     net_worth,
     produce,
-    unit_cost,
 )
 
 
@@ -113,12 +127,39 @@ class Engine:
         self.wage_floor_scale: float = 1.0
         # "band" = 参考价 + 成本价格带（默认）；
         # "markup" = 自由成本加成（实验，固定篮子下易崩溃）；
-        # "markup_soft" = 成本加成目标价 + 参考价软走廊（0.85–1.15×ref）。
+        # "markup_soft" = 成本加成目标价 + 参考价软走廊（0.85–1.15×ref）；
+        # "free" = V0.6 成本加成 + 需求/供给 + 成交价锚定；无成本带，
+        #          只有绝对安全轨 [PRICE_FLOOR, 20×初始价]。
         self.price_regime: str = "band"
         # "fixed" = 固定温饱篮子；"les" = Stone-Geary 需求（价格弹性）。
         self.demand_regime: str = "fixed"
         # 是否启用银行存款中介（Keynesian/MMT 启用；古典默认关闭）。
         self.bank_intermediation: bool = False
+
+        # --- V0.6 工资—生产率 / 工时制度 --------------------------------
+        # 制度性标准工时：16（古典/维多利亚）或 8（Fordist/Keynesian/
+        # MMT/晚期）。有效劳动 = 实际工时 / 标准工时。
+        self.work_hours: int = 16
+        # 工资目标参数（由 ScenarioConfig 覆盖）。
+        self.wage_productivity_share: float = 0.5
+        self.wage_adjustment_speed: float = 0.10
+        self.wage_bargain_power: float = 0.10
+        self.wage_inflation_pass_through: float = 1.0
+        # 月度通胀预期水平；初始值由剧本 inflation_expectation 给出，
+        # 之后按观察到的 CPI 变化缓慢适应。
+        self.inflation_expectations: float = 0.0
+        # 劳动生产率指数：实际增加值 / 就业有效劳动，基期 = 1。
+        self.productivity_index: float = 1.0
+        self._productivity_baseline: Optional[float] = None
+        self._productivity_smoothed: Optional[float] = None
+        self._productivity_raw: float = 0.0
+        # 消费价格指数（温饱篮子）与真实工资指数。
+        self.cpi: float = 1.0
+        self._cpi_baseline: float = max(1e-9, subsistence_cost(INITIAL_PRICES))
+        self.observed_inflation: float = 0.0
+        self.wage_index: float = 1.0
+        self.unit_labor_cost: float = 0.0
+        self.real_value_added: float = 0.0
         # --- 冲击测试钩子（默认全部中性，不改变基线行为）---------------
         # 行业产出乘数：{Industry: multiplier}；默认为空 = 1.0。
         self.productivity_multipliers: Dict[Industry, float] = {}
@@ -322,6 +363,7 @@ class Engine:
             is_child = age_months < self.demographics.working_age_months
         if birth_tick is None:
             birth_tick = self.tick - age_months
+        standard_hours = max(1, int(getattr(self, "work_hours", 16)))
         worker = Worker(
             id=self.new_worker_id(),
             industry=industry,
@@ -334,6 +376,8 @@ class Engine:
             retired=retired,
             parent_id=parent_id,
             birth_tick=birth_tick,
+            standard_hours=standard_hours,
+            hours=0 if (is_child or retired) else standard_hours,
         )
         self.workers[worker.id] = worker
         return worker
@@ -719,7 +763,8 @@ class Engine:
                     if parent is not None and parent.alive
                     else Industry.SERVICE
                 )
-                worker.hours = 16
+                worker.standard_hours = max(1, int(getattr(self, "work_hours", 16)))
+                worker.hours = worker.standard_hours
             if (
                 not worker.is_child
                 and not worker.retired
@@ -1222,29 +1267,72 @@ class Engine:
     # 工资 / 生产
     # ------------------------------------------------------------------
     def _update_price_bands(self) -> None:
-        """把薄市场的价格限制在重置成本带内。"""
+        """设置价格安全轨/成本锚。
+
+        - ``band`` / ``markup_soft``：成本价格带（中位单位成本 0.9–2.5×，
+          再受初始价 2×/4× 限制）。行为与 V0.5 完全一致。
+        - ``free``：不再设置成本地板/天花板，只保留绝对安全轨
+          ``[PRICE_FLOOR, 20×初始价]``；同时把各行业单位成本中位数和
+          markup 中位数写入市场，作为参考价路径的成本锚。低于成本的
+          价格、亏损、减产和退出都是正常信号。
+        """
         prices = self.market.reference_prices
+        # 价格制度以 Engine 为准；每步同步一次，允许运行时切换和测试。
+        self.market.price_regime = self.price_regime
+        if self.price_regime == "free":
+            for good in Good:
+                self.market.floors[good] = PRICE_FLOOR
+                self.market.ceilings[good] = (
+                    INITIAL_PRICES[good] * FREE_PRICE_CAP_MULT
+                )
+            costs: Dict[Good, List[float]] = {g: [] for g in Good}
+            markups: Dict[Good, List[float]] = {g: [] for g in Good}
+            for enterprise in self.active_enterprises():
+                good = SECTOR_PARAMS[enterprise.industry].output
+                workers = self.enterprise_workers(enterprise)
+                cost = normal_unit_cost(self, enterprise, prices, workers)
+                if cost <= 1e-9:
+                    cost = pricing_unit_cost(self, enterprise, prices, workers)
+                if cost > 1e-6:
+                    costs[good].append(cost)
+                # 首次定价就在成本锚里用校准后的 markup，避免成本锚
+                # 在第一个月仍用默认 0.15、把参考价一次性打低。
+                if not enterprise.markup_initialized and cost > 1e-9:
+                    normal = min(
+                        FREE_MARKUP_INIT_MAX,
+                        max(
+                            FREE_MARKUP_INIT_MIN,
+                            INITIAL_PRICES[good] / cost - 1.0,
+                        ),
+                    )
+                    enterprise.markup = normal
+                    enterprise.markup_normal = normal
+                    enterprise.markup_initialized = True
+                markups[good].append(
+                    min(FREE_MARKUP_MAX, max(FREE_MARKUP_MIN, enterprise.markup))
+                )
+            for good in Good:
+                if costs[good]:
+                    costs[good].sort()
+                    self.market.cost_anchors[good] = costs[good][
+                        len(costs[good]) // 2
+                    ]
+                else:
+                    self.market.cost_anchors.pop(good, None)
+                if markups[good]:
+                    markups[good].sort()
+                    self.market.markup_anchors[good] = markups[good][
+                        len(markups[good]) // 2
+                    ]
+                else:
+                    self.market.markup_anchors.pop(good, None)
+            return
+
         by_good: Dict[Good, List[float]] = {g: [] for g in Good}
         for enterprise in self.active_enterprises():
             good = SECTOR_PARAMS[enterprise.industry].output
             workers = self.enterprise_workers(enterprise)
-            cost = unit_cost(enterprise, prices, workers, self.land.price)
-            if self._is_household_farm(enterprise):
-                # 自耕农不领工资，但其自有劳动仍有机会成本。价格带用
-                # WAGE_BASE 作为影子工资，避免零现金成本把粮食价格带
-                # 压塌、进而让农机/化肥投资信号失真；该影子成本
-                # 不进入工资账单、利润表或任何现金转移。
-                owner_labor = sum(
-                    worker.effective_labor
-                    for worker in workers
-                    if self._is_household_farm_owner(enterprise, worker)
-                )
-                if owner_labor > 0 and enterprise.last_output > 1e-9:
-                    cost += (
-                        owner_labor
-                        * WAGE_BASE
-                        / enterprise.last_output
-                    )
+            cost = pricing_unit_cost(self, enterprise, prices, workers)
             if cost > 1e-6:
                 by_good[good].append(cost)
         for good, costs in by_good.items():
@@ -1360,7 +1448,8 @@ class Engine:
                 break
             worker.employer_id = "GOV"
             worker.wage = gov.jg_wage
-            worker.hours = 16
+            worker.standard_hours = max(1, int(getattr(self, "work_hours", 16)))
+            worker.hours = worker.standard_hours
             worker.industry = Industry.CONSTRUCTION
             worker.ui_months = 0
             gov.jg_workers.append(worker.id)
@@ -2501,7 +2590,8 @@ class Engine:
         heir.land_owned = own_mu
         # 继承人同样只是剩余索取者，不领工资。
         heir.wage = 0.0
-        heir.hours = 16
+        heir.standard_hours = max(1, int(getattr(self, "work_hours", 16)))
+        heir.hours = heir.standard_hours
 
     def _settle_estate(
         self, worker: Worker, heir: Optional[Worker] = None
@@ -2702,7 +2792,10 @@ class Engine:
                 and worker.cash >= COMFORT_SAVINGS
             ):
                 # 小康/悠闲按 PRD：三项达到温饱线 1.5 倍且有积蓄。
-                if worker.hours <= 8 and worker.cash >= LEISURE_SAVINGS:
+                leisure_threshold = max(
+                    1, int(round(worker.standard_hours * 0.5))
+                )
+                if worker.hours <= leisure_threshold and worker.cash >= LEISURE_SAVINGS:
                     worker.living_standard = "leisure"
                 else:
                     worker.living_standard = "comfort"
@@ -2724,6 +2817,79 @@ class Engine:
     # ------------------------------------------------------------------
     # 统计指标
     # ------------------------------------------------------------------
+    def _update_wage_price_indices(
+        self,
+        real_value_added: float,
+        employed_labor: float,
+        total_wages: float,
+        prices: Dict[Good, float],
+    ) -> None:
+        """更新生产率指数、CPI、通胀预期与单位劳动成本。
+
+        生产率定义：按初始价格计价的实际增加值 / 就业有效劳动（FTE）。
+        前 ``PRODUCTIVITY_WARMUP_MONTHS`` 个月是剧本初始补库存/价格调整
+        阶段，不作为定基；第 12 个月的当月原始值设为基期 1.0。这样避免把
+        “初始库存回补→需求计划回落”的过渡当成生产率崩溃。
+
+        单位劳动成本 = 名义工资总额 / 实际增加值；当工资按生产率同比例
+        增长（β≈1）时保持不变，β<1 时下降（工资落后于生产率）。
+        """
+        self.real_value_added = real_value_added
+        if employed_labor > 1e-9 and real_value_added > 1e-9:
+            raw = real_value_added / employed_labor
+            self._productivity_raw = raw
+            if self._productivity_smoothed is None:
+                self._productivity_smoothed = raw
+            else:
+                self._productivity_smoothed += PRODUCTIVITY_SMOOTHING * (
+                    raw - self._productivity_smoothed
+                )
+            if self._productivity_baseline is None:
+                # 基期前保持 1.0；第 12 个月把当月原始生产率定为基期。
+                # 不用平滑值定基：平滑值带有前 11 个月补库存高点的滞后，
+                # 会把基期抬高，制造虚假的生产率下降。
+                if self.tick >= PRODUCTIVITY_WARMUP_MONTHS:
+                    self._productivity_baseline = max(raw, 1e-9)
+                    # 平滑值此前一直追踪补库存高点；定基后必须重置到
+                    # 当月原始值，否则第 13 个月会从 1.0 跳到 1.6+。
+                    self._productivity_smoothed = raw
+                self.productivity_index = 1.0
+            else:
+                self.productivity_index = min(
+                    PRODUCTIVITY_INDEX_MAX,
+                    max(
+                        PRODUCTIVITY_INDEX_MIN,
+                        self._productivity_smoothed
+                        / self._productivity_baseline,
+                    ),
+                )
+        else:
+            self._productivity_raw = 0.0
+
+        subsistence = subsistence_cost(prices)
+        new_cpi = subsistence / self._cpi_baseline
+        if self.cpi > 1e-9:
+            observed = new_cpi / self.cpi - 1.0
+        else:
+            observed = 0.0
+        observed = min(
+            INFLATION_OBSERVATION_CAP,
+            max(-INFLATION_OBSERVATION_CAP, observed),
+        )
+        self.observed_inflation = observed
+        self.inflation_expectations = (
+            (1.0 - INFLATION_EXPECTATION_SMOOTHING)
+            * self.inflation_expectations
+            + INFLATION_EXPECTATION_SMOOTHING * observed
+        )
+        self.cpi = new_cpi
+        self.wage_index = self.average_wage() / max(WAGE_BASE, 1e-9)
+        self.unit_labor_cost = (
+            total_wages / real_value_added
+            if real_value_added > 1e-9
+            else 0.0
+        )
+
     def _record_stats(self) -> dict:
         prices = self.market.reference_prices
         alive_workers = [w for w in self.workers.values() if w.alive]
@@ -2741,6 +2907,10 @@ class Engine:
         ]
         food_output = self.production_month.get(Good.FOOD, 0.0)
         ag_productivity = food_output / max(len(ag_workers), 1)
+        employed_labor = sum(worker.effective_labor for worker in employed)
+        average_hours = (
+            sum(worker.hours for worker in employed) / max(len(employed), 1)
+        )
 
         active_enterprises = list(self.active_enterprises())
         total_capital = 0.0
@@ -2750,6 +2920,7 @@ class Engine:
         total_wages = 0.0
         total_interest = 0.0
         total_depreciation = 0.0
+        real_value_added = 0.0
         capitalist_capital = 0.0
         capitalist_profit = 0.0
         household_capital = 0.0
@@ -2769,6 +2940,15 @@ class Engine:
             total_depreciation += (
                 equipment_value(enterprise, prices) / DEPRECIATION_MONTHS
             )
+            # 实际增加值按初始价格计价：产出价值 − 实际消耗的中间投入
+            # 价值。初始价格是固定权重，避免用当期价格计算生产率时把
+            # 价格变化误当成产量变化。
+            out_good = SECTOR_PARAMS[enterprise.industry].output
+            real_value_added += (
+                enterprise.last_output * INITIAL_PRICES[out_good]
+            )
+            for good, qty in enterprise.last_input_used.items():
+                real_value_added -= qty * INITIAL_PRICES.get(good, 0.0)
             if enterprise.is_household:
                 household_capital += enterprise_capital
                 household_profit += enterprise.last_profit
@@ -2776,6 +2956,13 @@ class Engine:
             else:
                 capitalist_capital += enterprise_capital
                 capitalist_profit += enterprise.last_profit
+        output_index = sum(
+            self.production_month.get(good, 0.0) * INITIAL_PRICES[good]
+            for good in Good
+        )
+        self._update_wage_price_indices(
+            real_value_added, employed_labor, total_wages, prices
+        )
         # “全社会利润率”只统计资本主义企业（非 household）：
         # 家庭农场/服务自雇的所有者劳动收入不是资本回报，混入会系统性压低利润率。
         # 家庭企业的 last_profit 已扣除经营所得 payout，因此 household_profit
@@ -3088,10 +3275,32 @@ class Engine:
             "food_output": food_output,
             "prices": {g.value: prices[g] for g in Good},
             "production": {g.value: self.production_month.get(g, 0.0) for g in Good},
-            "output_index": sum(
-                self.production_month.get(good, 0.0) * INITIAL_PRICES[good]
+            "output_index": output_index,
+            # --- V0.6 工资—生产率指标 ---
+            "real_value_added": real_value_added,
+            "employed_labor": employed_labor,
+            "average_hours": average_hours,
+            "standard_work_hours": self.work_hours,
+            "average_wage": self.average_wage(),
+            "wage_index": self.wage_index,
+            "productivity_index": self.productivity_index,
+            "productivity_level": self._productivity_raw,
+            "unit_labor_cost": self.unit_labor_cost,
+            "cpi": self.cpi,
+            "observed_inflation": self.observed_inflation,
+            "inflation_expectation": self.inflation_expectations,
+            "real_wage_index": self.wage_index / max(self.cpi, 1e-9),
+            "wage_productivity_share": self.wage_productivity_share,
+            "wage_bargain_power": self.wage_bargain_power,
+            "wage_inflation_pass_through": self.wage_inflation_pass_through,
+            "price_cost_anchors": {
+                good.value: self.market.cost_anchors.get(good, 0.0)
                 for good in Good
-            ),
+            },
+            "price_markup_anchors": {
+                good.value: self.market.markup_anchors.get(good, 0.0)
+                for good in Good
+            },
             "volumes": {g.value: self.market.history[g]["volume"] for g in Good},
             "demand": {g.value: self.market.history[g]["demand"] for g in Good},
             "supply": {g.value: self.market.history[g]["supply"] for g in Good},

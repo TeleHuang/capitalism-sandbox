@@ -43,6 +43,25 @@ class ScenarioConfig:
     jg_max_workers: int = 0
     government_cash: float = 0.0
 
+    # --- V0.6 工资—生产率 / 工时制度 ---
+    # 制度性标准工时：16（古典/维多利亚）或 8（Fordist/Keynesian/MMT/晚期）。
+    # 有效劳动 = 实际工时 / 标准工时；产能以标准全职工人为口径。
+    work_hours: int = 16
+    # 工资目标 w* = WAGE_BASE × A^β × (1+π^e)^α × (1+tightness+institutional)
+    # β：生产率分享程度。古典/维多利亚压低（Engels 停顿）；Fordist/MMT 接近 1。
+    wage_productivity_share: float = 0.50
+    # 实际工资报价向目标调整的月度速度（0.10–0.30）；向下的调整会再乘
+    # WAGE_DOWNWARD_SPEED_MULT（0.10×3=0.30），避免高失业时工资下降过慢。
+    wage_adjustment_speed: float = 0.10
+    # 月度通胀预期初始值；之后按 CPI 观察值缓慢适应。金本位可设 0。
+    inflation_expectation: float = 0.0
+    # 通胀补偿程度 α：古典/维多利亚合同很少指数化，α 低；Fordist/MMT
+    # 的工资合同更接近完全补偿，α 高。它决定 π^e 向工资的传导强度。
+    wage_inflation_pass_through: float = 0.25
+    # 制度/阶级议价力量：放大真实工资追赶与生活成本危机压力。
+    # 古典/维多利亚低，Fordist/MMT 高。
+    wage_bargain_power: float = 0.10
+
     # --- V0.5 人口 / 代际 / 退休金 ---
     working_age_years: int = 14
     retirement_age_years: int = 0          # 0 = 不退休
@@ -95,6 +114,14 @@ CLASSICAL_LAISSEZ_FAIRE = ScenarioConfig(
     name="古典自由放任（pre-Keynesian）",
     policy_regime=PolicyRegime.CLASSICAL,
     money_regime=MoneyRegime.GOLD,
+    work_hours=16,
+    # 维多利亚/早期工业：工资只分享一小部分生产率收益，议价力量弱；
+    # 金本位下通胀预期为 0。
+    wage_productivity_share=0.50,
+    wage_adjustment_speed=0.10,
+    inflation_expectation=0.0,
+    wage_inflation_pass_through=0.25,
+    wage_bargain_power=0.10,
     working_age_years=14,
     retirement_age_years=0,
     # 名义 TFR 目标 5–6；食物/收入/parity 乘数会把有效生育率压到
@@ -115,6 +142,14 @@ KEYNESIAN_WELFARE = ScenarioConfig(
     policy_regime=PolicyRegime.KEYNESIAN,
     money_regime=MoneyRegime.GOLD,
     bank_intermediation=True,
+    # Fordist 妥协：8 小时标准工时；工资基本跟随生产率，工会议价较高；
+    # 金本位下通胀预期仍设为 0。
+    work_hours=8,
+    wage_productivity_share=1.00,
+    wage_adjustment_speed=0.25,
+    inflation_expectation=0.0,
+    wage_inflation_pass_through=0.75,
+    wage_bargain_power=0.55,
     tax_rate_wage=0.08,
     tax_rate_profit=0.08,
     ui_replacement=0.50,
@@ -152,6 +187,13 @@ MMT_SOVEREIGN = ScenarioConfig(
     policy_regime=PolicyRegime.MMT,
     money_regime=MoneyRegime.CREDIT,
     bank_intermediation=True,
+    # 主权信用货币可以维持温和通胀预期；8 小时工时 + 高议价力量。
+    work_hours=8,
+    wage_productivity_share=1.00,
+    wage_adjustment_speed=0.30,
+    inflation_expectation=0.0015,
+    wage_inflation_pass_through=1.00,
+    wage_bargain_power=0.65,
     tax_rate_wage=0.08,
     tax_rate_profit=0.08,
     ui_replacement=0.45,
@@ -184,6 +226,14 @@ LATE_CAPITALISM = ScenarioConfig(
     policy_regime=PolicyRegime.KEYNESIAN,
     money_regime=MoneyRegime.GOLD,
     bank_intermediation=True,
+    # 晚期 Fordist：8 小时工时，生产率分享较高但低于黄金时代，
+    # 老龄化/财政压力下议价力量略低。
+    work_hours=8,
+    wage_productivity_share=0.90,
+    wage_adjustment_speed=0.20,
+    inflation_expectation=0.0005,
+    wage_inflation_pass_through=0.75,
+    wage_bargain_power=0.45,
     tax_rate_wage=0.10,
     tax_rate_profit=0.10,
     ui_replacement=0.40,
@@ -223,6 +273,14 @@ def build_scenario_1(
     """
     engine.demographics = config.demographics()
     demo = engine.demographics
+    # V0.6 制度/工资参数必须在创建工人之前写入：create_worker 会据此
+    # 设置 standard_hours 和初始工时。
+    engine.work_hours = max(1, int(config.work_hours))
+    engine.wage_productivity_share = config.wage_productivity_share
+    engine.wage_adjustment_speed = config.wage_adjustment_speed
+    engine.wage_bargain_power = config.wage_bargain_power
+    engine.wage_inflation_pass_through = config.wage_inflation_pass_through
+    engine.inflation_expectations = config.inflation_expectation
 
     def sample_initial_age() -> int:
         """按近似稳定人口年龄分布抽取初始年龄（不是全 0/全同龄）。
@@ -324,6 +382,9 @@ def build_scenario_1(
                 cash=5000.0,
                 modernization_capable=True,
             )
+            # 工资报价从 WAGE_BASE 起步，之后按 V0.6 规则向目标部分调整；
+            # 若状态为 0，首月会直接跳到目标，掩盖工资粘性。
+            enterprise.wage_offer = WAGE_BASE
             for key, count in equipment.items():
                 for _ in range(count):
                     enterprise.add_equipment(key)

@@ -4,23 +4,54 @@ from typing import TYPE_CHECKING, Optional
 
 from .config import (
     BASE_GRAIN_YIELD,
+    DEPRECIATION_MONTHS,
     EQUIPMENT,
     FERTILIZER_COAL_BUFFER_MONTHS,
     FERTILIZER_PER_MU,
     FERTILIZER_YIELD_MULTIPLIER,
+    FREE_DEMAND_FACTOR_MAX,
+    FREE_DEMAND_FACTOR_MIN,
+    FREE_DEMAND_SLOPE,
+    FREE_GLUT_COVERAGE,
+    FREE_GLUT_SLOPE,
+    FREE_MARKUP_INIT_MAX,
+    FREE_MARKUP_INIT_MIN,
+    FREE_MARKUP_MAX,
+    FREE_MARKUP_MIN,
+    FREE_MARKUP_SPEED,
+    FREE_OBSERVED_WEIGHT,
+    FREE_PRICE_CAP_MULT,
+    FREE_REF_CORRIDOR,
+    INITIAL_PRICES,
     INVESTMENT_HURDLE,
     LAND_PER_WORKER_BASE,
+    PRICE_FLOOR,
     SECTOR_PARAMS,
     SKILL_MAX,
     WAGE_BASE,
+    WAGE_CAP_MULT,
+    WAGE_CASH_DISCOUNT,
+    WAGE_CATCHUP_CAP,
+    WAGE_CATCHUP_WEIGHT,
+    WAGE_COST_OF_LIVING_WEIGHT,
+    WAGE_DOWNWARD_SPEED_MULT,
+    WAGE_HIRING_PREMIUM,
+    WAGE_INFLATION_PASS_THROUGH,
+    WAGE_INSTITUTIONAL_CAP,
+    WAGE_PROFIT_SLOPE,
     WAGE_SWITCH_THRESHOLD,
+    WAGE_TIGHTNESS_SLOPE,
 )
 from .enums import Good, Industry
 from .production import (
+    average_skill,
+    average_wage,
     capital_value,
     capacity_at_skill_one,
     desired_workers,
     equipment_cost,
+    equipment_value,
+    farm_requirements,
     representative_roi,
     unit_cost,
 )
@@ -57,30 +88,339 @@ def should_switch(
     return best_offer > current_wage * (1.0 + threshold)
 
 
-def enterprise_wage_offer(engine: "Engine", enterprise: "Enterprise") -> float:
-    workers = engine.enterprise_workers(enterprise)
-    floor = wage_floor(engine.market.reference_prices) * getattr(
-        engine, "wage_floor_scale", 1.0
+def normal_unit_cost(
+    engine: "Engine",
+    enterprise: "Enterprise",
+    prices: dict[Good, float] | None = None,
+    workers: list["Worker"] | None = None,
+) -> float:
+    """正常产能利用率下的单位成本（full-cost / normal-cost pricing）。
+
+    用户讨论中的成本公式是 ``c_i = w_i l_i + Σ a_ij p_j + F_i / q_i^normal``：
+    固定费用按**正常产量**分摊，而不是按当月低利用率分摊。否则需求不足
+    → 减产 → 实际单位成本上升 → 成本加成涨价 → 需求更低，会形成虚假的
+    成本—价格螺旋（V0.6 自由定价早期版本正是这样把煤/铁推到安全上限）。
+
+    计算口径：
+    - 正常产量 = 设备产能 × 平均熟练度（农业 = 土地 × 亩产 × 熟练度，
+      施化肥时 ×2）；
+    - 正常用工 = 满产所需标准工时工人；工资率取企业在业工人平均工资
+      （无工人时取经济平均工资）；
+    - 中间投入按正常产量 × 投入系数 × 当前价格；
+    - 设备折旧按当前重置价值 / DEPRECIATION_MONTHS；
+    - 家庭农场所有者按 WAGE_BASE 计影子工资（不进入任何现金转移）。
+    """
+    prices = prices if prices is not None else engine.market.reference_prices
+    workers = (
+        workers
+        if workers is not None
+        else engine.enterprise_workers(enterprise)
     )
-    offer = max(WAGE_BASE * getattr(engine, "wage_floor_scale", 1.0), floor)
-    # `_labor_market` 在每月招聘前缓存一次失业率；否则每家企业都会
-    # 调用 labor_force_workers() 全量扫描，600+ 企业时是 O(n²)。
+    params = SECTOR_PARAMS[enterprise.industry]
+    skill = max(1.0, average_skill(workers)) if workers else 1.0
+
+    if enterprise.industry == Industry.AGRICULTURE:
+        if enterprise.land <= 0:
+            return 0.0
+        output = enterprise.land * BASE_GRAIN_YIELD * skill
+        if enterprise.use_fertilizer:
+            output *= FERTILIZER_YIELD_MULTIPLIER
+        if output <= 1e-9:
+            return 0.0
+        required, _ = farm_requirements(enterprise)
+        required = max(1, required)
+        owner_count = (
+            sum(
+                1
+                for worker in workers
+                if engine._is_household_farm_owner(enterprise, worker)
+            )
+            if enterprise.is_household
+            else 0
+        )
+        employee_count = max(0, required - owner_count)
+        employee_wages = [
+            worker.wage for worker in workers if worker.wage > 0
+        ]
+        employee_rate = (
+            sum(employee_wages) / len(employee_wages)
+            if employee_wages
+            else engine.average_wage()
+        )
+        wage_bill = owner_count * WAGE_BASE + employee_count * employee_rate
+        input_cost = 0.0
+        if enterprise.use_fertilizer:
+            input_cost = (
+                enterprise.land
+                * FERTILIZER_PER_MU
+                * prices.get(Good.FERTILIZER, 0.0)
+            )
+        depreciation = equipment_value(enterprise, prices) / DEPRECIATION_MONTHS
+        return (wage_bill + input_cost + depreciation) / output
+
+    capacity = capacity_at_skill_one(enterprise)
+    if capacity <= 0:
+        return 0.0
+    output = capacity * skill
+    required = desired_workers(enterprise, plan=1.0)
+    if required <= 0 or output <= 1e-9:
+        return 0.0
+    employee_wages = [worker.wage for worker in workers if worker.wage > 0]
+    wage_rate = (
+        sum(employee_wages) / len(employee_wages)
+        if employee_wages
+        else engine.average_wage()
+    )
+    wage_bill = required * wage_rate
+    input_cost = sum(
+        ratio * output * prices.get(good, 0.0)
+        for good, ratio in params.inputs.items()
+    )
+    depreciation = equipment_value(enterprise, prices) / DEPRECIATION_MONTHS
+    return (wage_bill + input_cost + depreciation) / output
+
+
+def pricing_unit_cost(
+    engine: "Engine",
+    enterprise: "Enterprise",
+    prices: dict[Good, float] | None = None,
+    workers: list["Worker"] | None = None,
+) -> float:
+    """定价用单位成本；家庭农场加入所有者自有劳动的机会成本。
+
+    自耕农不领现金工资，若直接用现金成本定价，粮食价格会塌到接近 0。
+    影子工资只进入定价/价格锚，不进入工资账单、利润或任何现金转移，
+    因此不会创造货币。
+    """
+    prices = prices if prices is not None else engine.market.reference_prices
+    workers = (
+        workers
+        if workers is not None
+        else engine.enterprise_workers(enterprise)
+    )
+    cost = unit_cost(enterprise, prices, workers, engine.land.price)
+    if (
+        enterprise.is_household
+        and enterprise.industry == Industry.AGRICULTURE
+        and enterprise.last_output > 1e-9
+    ):
+        owner_labor = sum(
+            worker.effective_labor
+            for worker in workers
+            if engine._is_household_farm_owner(enterprise, worker)
+        )
+        if owner_labor > 0:
+            cost += owner_labor * WAGE_BASE / enterprise.last_output
+    return cost
+
+
+def wage_target(engine: "Engine", enterprise: "Enterprise") -> float:
+    """V0.6 工资目标：生产率分享 + 通胀补偿 + 紧张度 + 制度性追赶。
+
+    ``w_target = WAGE_BASE × A^β × (1+π^e)^α × (1 + tightness + institutional)``
+
+    - ``A``：平滑劳动生产率指数（基期 = 1）；
+    - ``β = engine.wage_productivity_share``：生产率分享程度；
+    - ``π^e``：月度通胀预期；``α = wage_inflation_pass_through`` 是合同
+      指数化程度（古典低、Fordist/MMT 高）；
+    - ``tightness``：原工资曲线的失业率项 + 利润分享项；
+    - ``institutional``：制度/阶级议价项。真实工资落后于生产率时产生
+      “追赶”，生活成本跑赢工资时产生“危机”压力，由
+      ``wage_bargain_power`` 放大（古典/维多利亚被压低，Fordist/MMT 较高）。
+
+    该函数只给目标，不直接发钱；实际报价在 ``enterprise_wage_offer``
+    中以 ``wage_adjustment_speed`` 向目标部分调整，且工资始终是转移支付，
+    不创造货币。
+    """
+    productivity = max(
+        1e-9, float(getattr(engine, "productivity_index", 1.0))
+    )
+    share = max(
+        0.0, float(getattr(engine, "wage_productivity_share", 0.5))
+    )
+    expected_inflation = float(
+        getattr(engine, "inflation_expectations", 0.0)
+    )
+    pass_through = float(
+        getattr(engine, "wage_inflation_pass_through", WAGE_INFLATION_PASS_THROUGH)
+    )
+
     unemployment = getattr(engine, "_wage_unemployment", None)
     if unemployment is None:
         labor_force = engine.labor_force_workers()
         employed = sum(1 for worker in labor_force if worker.employed)
         unemployment = 1.0 - employed / max(1, len(labor_force))
-    # 工资曲线：失业率高于 7% 时压低报价，低于 7% 时抬高。
-    offer *= 1.0 + 0.5 * (0.07 - unemployment)
+    tightness = WAGE_TIGHTNESS_SLOPE * (0.07 - unemployment)
     if enterprise.last_revenue > 0 and enterprise.last_profit > 0:
-        margin = max(0.0, min(0.35, enterprise.last_profit / enterprise.last_revenue))
-        offer *= 1.0 + margin * 0.5
+        margin = max(
+            0.0, min(0.35, enterprise.last_profit / enterprise.last_revenue)
+        )
+        tightness += WAGE_PROFIT_SLOPE * margin
+
+    # 制度性追赶：用全经济平均工资与 CPI 判断真实工资是否落后。
+    cpi = max(1e-6, float(getattr(engine, "cpi", 1.0)))
+    wage_index = max(0.0, float(getattr(engine, "wage_index", 1.0)))
+    real_wage_index = wage_index / cpi
+    catch_up = max(
+        0.0,
+        min(WAGE_CATCHUP_CAP, productivity - real_wage_index),
+    )
+    cost_of_living_pressure = max(0.0, min(1.0, cpi / max(wage_index, 1e-9) - 1.0))
+    bargain = max(
+        0.0, float(getattr(engine, "wage_bargain_power", 0.0))
+    )
+    institutional = bargain * (
+        WAGE_CATCHUP_WEIGHT * catch_up
+        + WAGE_COST_OF_LIVING_WEIGHT * cost_of_living_pressure
+    )
+    institutional = min(WAGE_INSTITUTIONAL_CAP, institutional)
+
+    scale = float(getattr(engine, "wage_floor_scale", 1.0))
+    base = (
+        WAGE_BASE
+        * scale
+        * (productivity ** share)
+        * max(0.0, 1.0 + expected_inflation) ** pass_through
+    )
+    return base * max(0.0, 1.0 + tightness + institutional)
+
+
+def enterprise_wage_offer(engine: "Engine", enterprise: "Enterprise") -> float:
+    """企业工资报价：向 ``wage_target`` 部分调整，并保留短期摩擦。"""
+    workers = engine.enterprise_workers(enterprise)
+    scale = float(getattr(engine, "wage_floor_scale", 1.0))
+    floor = wage_floor(engine.market.reference_prices) * scale
+    cap = WAGE_BASE * WAGE_CAP_MULT
+    target = wage_target(engine, enterprise)
+
+    speed = max(
+        0.0,
+        min(1.0, float(getattr(engine, "wage_adjustment_speed", 0.15))),
+    )
+    state = float(getattr(enterprise, "wage_offer", 0.0))
+    if state <= 0.0:
+        # 新企业/首次报价没有历史状态：直接落到目标，避免从 0 爬升。
+        state = target
+    else:
+        # 向上粘性、向下更快：失业上升时工资能及时回落。
+        step_speed = speed
+        if target < state:
+            step_speed = min(
+                1.0, speed * WAGE_DOWNWARD_SPEED_MULT
+            )
+        state += step_speed * (target - state)
+    # 状态也夹在生存下限与绝对上限之间；否则下限会把报价反复拉回，
+    # 而状态仍停在低处，形成虚假的长期滞后。
+    state = min(max(state, floor), cap)
+    enterprise.wage_offer = state
+
+    offer = state
     if len(workers) < desired_workers(enterprise):
-        offer *= 1.10
+        offer *= WAGE_HIRING_PREMIUM
     wage_bill = sum(w.wage * w.effective_labor for w in workers)
     if enterprise.cash < max(wage_bill * 2.0, offer * 2.0):
-        offer *= 0.95
-    return min(max(floor, round(offer, 2)), WAGE_BASE * 5.0)
+        offer *= WAGE_CASH_DISCOUNT
+    return min(max(floor, round(offer, 2)), cap)
+
+
+def _inventory_months(enterprise: "Enterprise", good: Good) -> float:
+    """库存覆盖月数；服务业/无库存目标部门返回 0。"""
+    inventory = enterprise.inv(good)
+    sales = enterprise.smoothed_sales
+    target = enterprise.target_inventory_months
+    if sales > 1e-6:
+        return inventory / sales
+    if inventory <= 1e-9:
+        return 0.0
+    return max(target, 0.5) * 2.0
+
+
+def _ensure_free_markup(
+    engine: "Engine", enterprise: "Enterprise", cost: float, ref: float
+) -> None:
+    """自由成本加成制度：首次定价按当前 ref/cost 校准 markup。
+
+    初始价格结构（煤/铁/钢/布的历史价格）与成本加成的差距很大；
+    若从统一 15% 起步，会在头一年制造一次性的价格水平跳变。首次报价
+    一次性校准到 ref，之后 markup 围绕该正常加成率波动。
+    """
+    if enterprise.markup_initialized or cost <= 1e-9:
+        return
+    normal = min(
+        FREE_MARKUP_INIT_MAX,
+        max(FREE_MARKUP_INIT_MIN, ref / cost - 1.0),
+    )
+    enterprise.markup = normal
+    enterprise.markup_normal = normal
+    enterprise.markup_initialized = True
+
+
+def free_price_target(
+    engine: "Engine", enterprise: "Enterprise", cost: float = 0.0
+) -> float:
+    """free 制度的目标卖价（未夹在可成交走廊内）。
+
+    ``p* = (1+markup) × cost × demand_factor``，再与上月成交价弱锚定。
+    markup 每月按库存缺口和未成交/未售出比例慢速调整。该函数会更新
+    enterprise.markup；参数 ``cost`` 缺省时用定价成本（含自耕农影子工资）。
+    """
+    out = SECTOR_PARAMS[enterprise.industry].output
+    if cost <= 0:
+        cost = normal_unit_cost(engine, enterprise)
+        if cost <= 1e-9:
+            cost = pricing_unit_cost(engine, enterprise)
+    ref = engine.market.reference_prices.get(out, 1.0)
+    _ensure_free_markup(engine, enterprise, cost, ref)
+
+    target_months = enterprise.target_inventory_months
+    if target_months > 0:
+        months = _inventory_months(enterprise, out)
+        gap = (target_months - months) / max(target_months, 1.0)
+    else:
+        # 服务不可储存：没有库存目标，只由未成交需求/未售出服务驱动。
+        gap = 0.0
+
+    history = engine.market.history.get(out, {})
+    demand = max(0.0, history.get("demand", 0.0))
+    unmet_ratio = (
+        min(1.0, max(0.0, history.get("unmet", 0.0)) / demand)
+        if demand > 1e-9 else 0.0
+    )
+    volume = max(0.0, history.get("volume", 0.0))
+    unsold = max(0.0, history.get("unsold", 0.0))
+    unsold_ratio = (
+        min(1.0, unsold / (volume + unsold))
+        if volume + unsold > 1e-9 else 0.0
+    )
+
+    adjustment = gap + 0.5 * unmet_ratio - 0.25 * unsold_ratio
+    # markup 围绕校准后的正常加成率波动，而不是永久棘轮：
+    # 持久短缺给出有界溢价（最高 2× 正常加成），短缺消失后回落。
+    normal = max(FREE_MARKUP_MIN, enterprise.markup_normal)
+    desired_markup = normal * min(2.0, max(0.5, 1.0 + adjustment))
+    desired_markup = min(FREE_MARKUP_MAX, max(FREE_MARKUP_MIN, desired_markup))
+    enterprise.markup += FREE_MARKUP_SPEED * (
+        desired_markup - enterprise.markup
+    )
+    enterprise.markup = min(
+        FREE_MARKUP_MAX, max(FREE_MARKUP_MIN, enterprise.markup)
+    )
+    demand_factor = 1.0 + (
+        FREE_DEMAND_SLOPE * unmet_ratio - FREE_GLUT_SLOPE * unsold_ratio
+    )
+    demand_factor = min(
+        FREE_DEMAND_FACTOR_MAX,
+        max(FREE_DEMAND_FACTOR_MIN, demand_factor),
+    )
+    target = cost * (1.0 + enterprise.markup) * demand_factor
+
+    observed = history.get("observed", 0.0)
+    if observed > 0:
+        target = (
+            (1.0 - FREE_OBSERVED_WEIGHT) * target
+            + FREE_OBSERVED_WEIGHT * observed
+        )
+    return max(PRICE_FLOOR, target)
 
 
 def enterprise_ask_price(engine: "Engine", enterprise: "Enterprise") -> float:
@@ -98,6 +438,33 @@ def enterprise_ask_price(engine: "Engine", enterprise: "Enterprise") -> float:
         months = 3.0 if inventory > 0 else 0.0
     else:
         months = inventory / sales
+
+    if getattr(engine, "price_regime", "band") == "free":
+        # V0.6：成本加成目标价 + 需求/供给调整 + 成交价锚定。
+        # 没有成本下限；只保留绝对安全轨。卖价再夹在参考价 ±3% 内，
+        # 保证买卖价能够穿价成交；价格方向由参考价路径逐月体现。
+        pricing_cost = normal_unit_cost(
+            engine, enterprise, engine.market.reference_prices, workers
+        )
+        if pricing_cost <= 1e-9:
+            pricing_cost = pricing_unit_cost(
+                engine, enterprise, engine.market.reference_prices, workers
+            )
+        if pricing_cost > 1e-9:
+            target = free_price_target(engine, enterprise, pricing_cost)
+        else:
+            # 没有成本信号：退回去年成交价/参考价；不再人为设成本底。
+            observed = engine.market.history[out].get("observed", 0.0)
+            target = observed if observed > 0 else ref
+        price = min(
+            max(target, ref * (1.0 - FREE_REF_CORRIDOR)),
+            ref * (1.0 + FREE_REF_CORRIDOR),
+        )
+        price = min(
+            price,
+            INITIAL_PRICES[out] * FREE_PRICE_CAP_MULT,
+        )
+        return max(PRICE_FLOOR, price)
 
     if getattr(engine, "price_regime", "band") == "markup" and cost > 0:
         # L2：成本加成 + 库存调整 + 软走廊。

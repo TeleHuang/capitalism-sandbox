@@ -75,9 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--price-regime",
-        choices=("band", "markup_soft"),
+        choices=("band", "markup_soft", "free"),
         default="band",
-        help="价格制度：band（默认参考价+成本带）/ markup_soft（参考价锚定的软成本加成）",
+        help=(
+            "价格制度：band（默认参考价+成本带）/ markup_soft（参考价锚定的"
+            "软成本加成）/ free（成本加成+供求，无成本带，仅绝对安全轨）"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -103,6 +106,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"  失业率：{final['unemployment_rate'] * 100:.1f}%")
     print(f"  全社会利润率：{final['profit_rate'] * 100:.2f}%")
+    print(
+        f"  标准工时：{final['standard_work_hours']}h  "
+        f"实际平均工时：{final['average_hours']:.1f}h  "
+        f"平均工资：{final['average_wage']:.2f}"
+    )
+    print(
+        f"  劳动生产率指数：{final['productivity_index']:.3f}  "
+        f"单位劳动成本：{final['unit_labor_cost']:.3f}  "
+        f"CPI：{final['cpi']:.3f}  "
+        f"通胀预期：{final['inflation_expectation'] * 100:.3f}%/月"
+    )
     print(
         f"  粮食产出：{final['food_output']:.1f}  "
         f"农业劳动生产率：{final['ag_productivity']:.2f}"
