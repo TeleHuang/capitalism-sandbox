@@ -607,6 +607,12 @@ function applyQueryOptions() {
   //   ?autostart=keynesian&months=60&seed=1&price=free&view=parity
   //   ?autostart=classical&months=60&factory=steel_mill
   const params = new URLSearchParams(window.location.search);
+  const durables = params.get("durables");
+  if (durables !== null) {
+    state.durables = !["0", "false", "off"].includes(durables.toLowerCase());
+    if ($("durables-toggle")) $("durables-toggle").checked = state.durables;
+    renderDeckNote();
+  }
   const auto = params.get("autostart");
   if (!auto) return;
   const regime = auto === "1" ? "classical" : auto;
@@ -617,13 +623,10 @@ function applyQueryOptions() {
   if (Number.isFinite(seed) && seed >= 0) state.seed = Math.trunc(seed);
   const price = params.get("price");
   if (["free", "band", "markup_soft"].includes(price)) state.priceRegime = price;
-  const durables = params.get("durables");
-  if (durables !== null) state.durables = !["0", "false", "off"].includes(durables.toLowerCase());
   pendingView = params.get("view");
   pendingFactory = params.get("factory");
   $("seed-input").value = state.seed;
   $("price-regime").value = state.priceRegime;
-  if ($("durables-toggle")) $("durables-toggle").checked = state.durables;
   for (const button of $("months-seg").querySelectorAll("[data-months]")) {
     button.classList.toggle("active", Number(button.dataset.months) === state.months);
   }
@@ -929,7 +932,11 @@ function renderKpis(stat) {
       history: series("housing_stock_per_adult"), delta: state.month > 1 ? stat.housing_stock_per_adult - statAt(state.month - 1).housing_stock_per_adult : 0,
     },
   ];
-  $("kpi-grid").innerHTML = cards.map((card) => {
+  const durableOn = !!state.engine?.features?.durablesA2;
+  const visibleCards = durableOn
+    ? cards
+    : cards.filter((card) => card.label !== "住房存量");
+  $("kpi-grid").innerHTML = visibleCards.map((card) => {
     const deltaClass = card.delta > 0 ? "pos" : card.delta < 0 ? "neg" : "muted";
     const deltaText = card.label.includes("失业率") || card.label.includes("食品占比")
       ? `${card.delta >= 0 ? "+" : ""}${card.delta.toFixed(2)} pp`
@@ -1327,11 +1334,16 @@ equipment vintage: 120 months → scrap; replacement investment</pre>` +
     ["V0.6 肉类 / 畜牧业 / 服务吸收", true],
     ["V0.6 工资—生产率 / 8h–16h / free 价格", true],
     ["V0.5 人口 / 代际 / 养老金", true],
-    ["A2 衣物/住房/汽车寿命、废钢、土地兼并", durableOn],
-    ["C 贷款创造存款 / 准备金 / 央行反应函数", false],
+    ["A2 衣物/住房/汽车寿命、废钢、土地兼并", durableOn, "off"],
+    ["C 贷款创造存款 / 准备金 / 央行反应函数", false, "deferred"],
   ];
-  $("feature-coverage").innerHTML = coverage.map(([label, done]) =>
-    `<div class="feature-item"><span class="dot ${done ? "ok" : "deferred"}"></span><span>${escapeHtml(label)}<br><span class="faint">${done ? "已移植到 JS 引擎" : "未实现 · 扩展点已预留"}</span></span></div>`).join("");
+  $("feature-coverage").innerHTML = coverage.map(([label, done, off]) => {
+    const status = done
+      ? "已移植到 JS 引擎"
+      : off === "off" ? "本次运行关闭 · 可在开始界面开启" : "未实现 · 扩展点已预留";
+    const dot = done ? "ok" : off === "off" ? "off" : "deferred";
+    return `<div class="feature-item"><span class="dot ${dot}"></span><span>${escapeHtml(label)}<br><span class="faint">${status}</span></span></div>`;
+  }).join("");
 }
 function renderScalePanel() {
   const industry = state.scaleIndustry;
@@ -1477,6 +1489,7 @@ function ppClass(dev) {
 }
 
 function renderData(stat) {
+  const durableOn = !!state.engine?.features?.durablesA2;
   const warnings = stat.warnings || [];
   $("warning-panel").innerHTML = warnings.length
     ? `<ul class="warning-list">${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
@@ -1538,36 +1551,50 @@ function renderData(stat) {
       ["服务就业占比", fmtPct(stat.service_employment_share)],
       ["肉类就业占比", fmtPct(stat.livestock_employment_share)],
     ])}</div>`;
-  const durableRows = [
-    ["衣物", `${fmtNum(stat.cloth_stock_per_adult, 1)} 件/成人`, `${fmtNum(stat.cloth_target_per_adult, 1)} 件/成人`, fmtNum(stat.cloth_purchases, 0), fmtNum(stat.cloth_wear, 0), `质量 ${fmtNum(stat.cloth_quality_index, 2)} · 寿命 60 月`],
-    ["住房", `${fmtNum(stat.housing_stock_per_adult, 1)} ㎡/成人`, `${fmtNum(stat.housing_target_per_adult, 1)} ㎡/成人`, fmtNum(stat.housing_purchases, 0), fmtNum(stat.housing_wear, 0), `维修 ${fmtCompact(stat.maintenance_spending)} 元 · 新建 ${fmtNum(stat.housing_new_construction, 1)} ㎡ · 寿命 600 月`],
-    ["汽车", `${fmtNum(stat.cars_per_100_adults, 1)} 辆/百成人`, `${fmtNum(stat.car_target, 0)} 辆`, fmtNum(stat.car_purchases, 2), fmtNum(stat.car_scrapped, 2), `价格 ${fmtNum(stat.prices.car, 1)} 元 · 寿命 120 月`],
-    ["设备", `${fmtNum(stat.equipment_vintage_units, 0)} 台 vintage`, `平均 ${fmtNum(stat.equipment_average_age_months, 1)} 月`, fmtNum(stat.equipment_retired_units, 1), fmtNum(stat.scrap_generated, 2), `废钢 ${fmtNum(stat.scrap_generated_equipment, 2)} 吨 + 汽车 ${fmtNum(stat.scrap_generated_car, 2)} 吨`],
-  ];
-  $("durable-data").innerHTML = table(["类别", "存量", "目标", "购买/月", "磨损或报废/月", "说明"], durableRows) +
-    `<div class="fact-grid">${factRows([
-      ["耐用品支出", `${fmtCompact(stat.durable_spending)} 元/月`],
-      ["耐用品资产价值", `${fmtCompact(stat.durable_asset_value)} 元`],
-      ["维修支出", `${fmtCompact(stat.maintenance_spending)} 元/月`],
-      ["房屋新建", `${fmtNum(stat.housing_new_construction, 1)} ㎡/月`],
-      ["设备替换需求", `${fmtNum(stat.replacement_demand_units, 0)} 台`],
-      ["替换项目", fmtInt(stat.replacement_projects)],
-    ])}</div>` +
-    `<p class="table-foot">存量不进入货币总量；购买是家庭与企业的现金转移。衣物/住房预算份额按当月购买计算，磨损按存量/寿命计算，两者不重复计入消费。</p>`;
-  const bins = stat.equipment_vintage_bins || {};
-  $("scrap-data").innerHTML = table(["指标", "数值", "说明"], [
-    ["废钢价格", `${fmtNum(stat.scrap_price, 2)} 元/吨`, "锚定铁矿价 × 0.6，按短缺/过剩调整"],
-    ["废钢库存", `${fmtNum(stat.scrap_inventory, 1)} 吨`, "企业 + 家庭 + 资产池"],
-    ["钢厂废钢用量", `${fmtNum(stat.scrap_used_steel, 2)} 吨/月`, "替代铁矿路线"],
-    ["废钢钢 / 铁矿钢", `${fmtNum(stat.steel_scrap_output, 1)} / ${fmtNum(stat.steel_ore_output, 1)} 吨`, `废钢路线占比 ${fmtPct(stat.scrap_recipe_share, 1)}`],
-    ["设备平均年龄", `${fmtNum(stat.equipment_average_age_months, 1)} 月`, `0–23: ${fmtNum(bins["0-23"], 0)} · 24–59: ${fmtNum(bins["24-59"], 0)} · 60–89: ${fmtNum(bins["60-89"], 0)} · 90–119: ${fmtNum(bins["90-119"], 0)}`],
-    ["设备报废 / 废钢", `${fmtNum(stat.equipment_retired_units, 1)} 台 / ${fmtNum(stat.scrap_generated_equipment, 2)} 吨`, "120 月寿命；小农机出售也计入"],
-    ["汽车报废 / 废钢", `${fmtNum(stat.car_scrapped, 2)} 辆 / ${fmtNum(stat.scrap_generated_car, 2)} 吨`, "每辆约 1.2 吨废钢"],
-    ["兼并农场 / 面积", `${fmtInt(stat.consolidated_farms)} 家 / ${fmtNum(stat.consolidated_land, 0)} 亩`, `平均 ${fmtNum(stat.average_capitalist_farm_mu, 1)} 亩`],
-    ["农机总功率", fmtNum(stat.farm_equipment_power, 0), `农业就业 ${fmtInt(stat.industry_employed.agriculture)} 人`],
-    ["闲置小农机出售", `${fmtNum(stat.idle_equipment_scrapped, 1)} 台/月`, "卖给钢厂作为废钢，不重复计土地/设备"],
-  ]) +
-    `<p class="table-foot">废钢是实物商品，不是货币；设备/汽车退役只把金属转入废钢一次。钢厂废钢路线每吨钢耗 1.5 吨废钢 + 0.5 吨煤；铁矿路线耗 1.5 吨铁矿 + 1.0 吨煤。</p>`;
+  if (durableOn) {
+    const durableRows = [
+      ["衣物", `${fmtNum(stat.cloth_stock_per_adult, 1)} 件/成人`, `${fmtNum(stat.cloth_target_per_adult, 1)} 件/成人`, fmtNum(stat.cloth_purchases, 0), fmtNum(stat.cloth_wear, 0), `质量 ${fmtNum(stat.cloth_quality_index, 2)} · 寿命 60 月`],
+      ["住房", `${fmtNum(stat.housing_stock_per_adult, 1)} ㎡/成人`, `${fmtNum(stat.housing_target_per_adult, 1)} ㎡/成人`, fmtNum(stat.housing_purchases, 0), fmtNum(stat.housing_wear, 0), `维修 ${fmtCompact(stat.maintenance_spending)} 元 · 新建 ${fmtNum(stat.housing_new_construction, 1)} ㎡ · 寿命 600 月`],
+      ["汽车", `${fmtNum(stat.cars_per_100_adults, 1)} 辆/百成人`, `${fmtNum(stat.car_target / Math.max(1, stat.population - stat.children) * 100, 1)} 辆/百成人`, fmtNum(stat.car_purchases, 2), fmtNum(stat.car_scrapped, 2), `价格 ${fmtNum(stat.prices.car, 1)} 元 · 寿命 120 月`],
+    ];
+    $("durable-data").innerHTML = table(["类别", "存量", "目标", "购买/月", "磨损或报废/月", "说明"], durableRows) +
+      table(["设备", "存量", "平均年龄", "替换需求/月", "报废/月", "说明"], [[
+        "农机/矿井设备",
+        `${fmtNum(stat.equipment_vintage_units, 0)} 台`,
+        `${fmtNum(stat.equipment_average_age_months, 1)} 月`,
+        `${fmtNum(stat.replacement_demand_units, 0)} 台`,
+        `${fmtNum(stat.equipment_retired_units, 1)} 台`,
+        `废钢 ${fmtNum(stat.scrap_generated_equipment, 2)} 吨（汽车另 ${fmtNum(stat.scrap_generated_car, 2)} 吨）`,
+      ]]) +
+      `<div class="fact-grid">${factRows([
+        ["耐用品支出", `${fmtCompact(stat.durable_spending)} 元/月`],
+        ["耐用品资产价值", `${fmtCompact(stat.durable_asset_value)} 元`],
+        ["维修支出", `${fmtCompact(stat.maintenance_spending)} 元/月`],
+        ["房屋新建", `${fmtNum(stat.housing_new_construction, 1)} ㎡/月`],
+        ["设备替换需求", `${fmtNum(stat.replacement_demand_units, 0)} 台`],
+        ["替换项目", fmtInt(stat.replacement_projects)],
+      ])}</div>` +
+      `<p class="table-foot">存量不进入货币总量；购买是家庭与企业的现金转移。衣物/住房预算份额按当月购买计算，磨损按存量/寿命计算，两者不重复计入消费。</p>`;
+    const bins = stat.equipment_vintage_bins || {};
+    $("scrap-data").innerHTML = table(["指标", "数值", "说明"], [
+      ["废钢价格", `${fmtNum(stat.scrap_price, 2)} 元/吨`, "锚定铁矿价 × 0.6，按短缺/过剩调整"],
+      ["废钢库存", `${fmtNum(stat.scrap_inventory, 1)} 吨`, "企业 + 家庭 + 资产池"],
+      ["钢厂废钢用量", `${fmtNum(stat.scrap_used_steel, 2)} 吨/月`, "替代铁矿路线"],
+      ["废钢钢 / 铁矿钢", `${fmtNum(stat.steel_scrap_output, 1)} / ${fmtNum(stat.steel_ore_output, 1)} 吨`, `废钢路线占比 ${fmtPct(stat.scrap_recipe_share, 1)}`],
+      ["设备平均年龄", `${fmtNum(stat.equipment_average_age_months, 1)} 月`, `0–23: ${fmtNum(bins["0-23"], 0)} · 24–59: ${fmtNum(bins["24-59"], 0)} · 60–89: ${fmtNum(bins["60-89"], 0)} · 90–119: ${fmtNum(bins["90-119"], 0)}`],
+      ["设备报废 / 废钢", `${fmtNum(stat.equipment_retired_units, 1)} 台 / ${fmtNum(stat.scrap_generated_equipment, 2)} 吨`, "120 月寿命；小农机出售也计入"],
+      ["汽车报废 / 废钢", `${fmtNum(stat.car_scrapped, 2)} 辆 / ${fmtNum(stat.scrap_generated_car, 2)} 吨`, "每辆约 1.2 吨废钢"],
+      ["兼并农场 / 面积", `${fmtInt(stat.consolidated_farms)} 家 / ${fmtNum(stat.consolidated_land, 0)} 亩`, `平均 ${fmtNum(stat.average_capitalist_farm_mu, 1)} 亩`],
+      ["农机总功率", fmtNum(stat.farm_equipment_power, 0), `农业就业 ${fmtInt(stat.industry_employed.agriculture)} 人`],
+      ["闲置小农机出售", `${fmtNum(stat.idle_equipment_scrapped, 1)} 台/月`, "卖给钢厂作为废钢，不重复计土地/设备"],
+    ]) +
+      `<p class="table-foot">废钢是实物商品，不是货币；设备/汽车退役只把金属转入废钢一次。钢厂废钢路线每吨钢耗 1.5 吨废钢 + 0.5 吨煤；铁矿路线耗 1.5 吨铁矿 + 1.0 吨煤。</p>`;
+  } else {
+    $("durable-data").innerHTML =
+      '<p class="table-foot">A2 关闭：本次运行使用 V0.6 月度流量口径，无耐用品存量、设备寿命或废钢。</p>';
+    $("scrap-data").innerHTML =
+      '<p class="table-foot">A2 关闭：无设备 vintage 与废钢市场。</p>';
+  }
 }
 function revenueShare(value, revenue) {
   if (Math.abs(revenue) < 1e-9) return "—";
@@ -1647,7 +1674,9 @@ function renderFactory() {
   } else if (industry === "auto_factory") {
     mechanism = "汽车装配线投入钢铁、产出汽车；汽车是家庭耐用品，寿命 120 个月，报废后成为废钢。为保持一企业一产出，汽车由独立汽车厂生产，而不是机械厂同厂切换（已记录偏差）。";
   } else if (industry === "steel_mill") {
-    mechanism = "炼钢厂有两条实物配方：铁矿路线 1 钢 = 1.5 铁矿 + 1.0 煤；废钢路线 1 钢 = 1.5 废钢 + 0.5 煤。钢厂按可得库存与相对成本选择路线，废钢来自报废设备与汽车。";
+    mechanism = state.engine?.features?.durablesA2
+      ? "炼钢厂有两条实物配方：铁矿路线 1 钢 = 1.5 铁矿 + 1.0 煤；废钢路线 1 钢 = 1.5 废钢 + 0.5 煤。钢厂按可得库存与相对成本选择路线，废钢来自报废设备与汽车。"
+      : "炼钢厂当前只走铁矿路线：1 钢 = 1.5 铁矿 + 1.0 煤。废钢路线与报废设备/汽车仅在 A2 开启时可用。";
   } else if (industry === "machinery_factory") {
     mechanism = "机械厂生产农机/矿井设备/纺织机/反应炉等资本品，投入钢铁。A2 的汽车由独立汽车装配行业生产；这是对“机械厂可产农机或汽车”的简化偏差。";
   } else if (industry === "livestock") {

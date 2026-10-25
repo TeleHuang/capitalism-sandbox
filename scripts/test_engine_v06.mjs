@@ -298,6 +298,23 @@ test("A2: 60-month stock conservation, money conservation and no famine", () => 
       worker.cars >= -1e-9 && (worker.scrap || 0) >= -1e-9,
       "household durable stocks must not be negative");
   }
+  // Dead workers are excluded from every stock aggregate and market; their
+  // durables must be settled to the heir or the estate asset pool.
+  for (const worker of engine.workers.values()) {
+    if (worker.alive) continue;
+    assert.ok((worker.cloth || 0) < 1e-9 && (worker.housing || 0) < 1e-9 &&
+      (worker.cars || 0) < 1e-9 && (worker.scrap || 0) < 1e-9,
+      `${worker.id} retained durable stocks after death`);
+  }
+});
+
+test("A2 off: car/scrap zero-output warnings are suppressed", () => {
+  const engine = run("classical", 60, 1, "free", { durables: false });
+  const stat = engine.stats.at(-1);
+  assert.equal(stat.warnings.filter((warning) => /汽车|废钢/.test(warning)).length, 0,
+    "A2-off oracle replay should not warn about car/scrap zero output");
+  assert.ok(!stat.zero_output_streak.car, "car zero-output streak should be absent/zero");
+  assert.ok(!stat.zero_output_streak.scrap, "scrap zero-output streak should be absent/zero");
 });
 
 // ---------------------------------------------------------------------
@@ -319,6 +336,20 @@ if (SLOW) {
       if (regime === "classical") {
         assert.equal(engine.stats.reduce((sum, stat) => sum + stat.hunger_deaths, 0), 0,
           "classical A2 must not regress into famine at 240 months");
+        assert.ok(engine.stats.at(-1).production.machinery > 0,
+          "classical machinery supply must survive A2 retirement");
+        assert.ok(engine.stats.at(-1).production.steel > 0,
+          "classical steel supply must not collapse");
+      }
+      if (regime === "keynesian") {
+        assert.ok(engine.stats.at(-1).production.fertilizer > 0,
+          "keynesian fertilizer supply must not collapse");
+        for (const enterprise of engine.enterprises.values()) {
+          if (enterprise.active && enterprise.industry !== "agriculture") {
+            assert.ok(enterprise.equipment.size > 0,
+              `${enterprise.id} (${enterprise.industry}) is active without equipment`);
+          }
+        }
       }
     }
   });

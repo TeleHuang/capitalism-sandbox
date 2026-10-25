@@ -496,19 +496,62 @@ import {
         return feasible[0].recipe;
       }
     }
-    const scrapMarketSupply = engine.market?.history?.scrap?.supply || 0.0;
-    const scrapInStock = enterprise.inv("scrap") > 1e-9;
-    const scrapGlobal = Number(engine._scrapSupplyStock) || 0.0;
-    const scrapAvailable = scrapInStock || scrapMarketSupply > 1e-6 || scrapGlobal > 1e-6;
+    // Planning must not treat economy-wide scrap as this mill's availability:
+    // the scrap route is only realistic when own inventory covers the planned
+    // scrap need. Otherwise the ore route keeps steel supply from collapsing.
+    const scrapRecipe = recipes.find((recipe) => recipe.name === "scrap");
+    const scrapRatio = scrapRecipe ? Math.max(0.0, scrapRecipe.inputs.scrap || 0.0) : 0.0;
+    const plannedScrap = Math.max(0.0, Number(enterprise.plannedOutput) || 0.0) * scrapRatio;
+    const scrapAvailable = scrapRatio > 0 && plannedScrap > 1e-9 &&
+      enterprise.inv("scrap") >= plannedScrap - 1e-9;
     let candidates = recipes.filter((recipe) => recipe.name !== "scrap" || scrapAvailable);
     if (!candidates.length) candidates = recipes.slice();
     candidates.sort((a, b) => steelRecipeCost(a, prices) - steelRecipeCost(b, prices));
     return candidates[0];
   }
 
+  /**
+   * Planned input ratios. Steel mills may use the scrap route only when their
+   * own stock or a deterministic per-mill allocation of economy-wide scrap
+   * covers the whole planned scrap need. A mill that cannot secure a full
+   * allocation plans the ore route, so iron ore demand never collapses just
+   * because a few tons of scrap exist somewhere.
+   */
   function plannedInputRatios(engine, enterprise, prices) {
     if (enterprise.industry === "steel_mill" && engine && engine.durablesA2) {
-      return chooseSteelRecipe(engine, enterprise, prices, false).inputs;
+      const recipes = steelRecipes();
+      if (recipes) {
+        const ore = recipes.find((recipe) => recipe.name === "ore");
+        const scrap = recipes.find((recipe) => recipe.name === "scrap");
+        const fallback = ore ? ore.inputs : SECTOR_PARAMS.get(enterprise.industry).inputs;
+        if (ore && scrap) {
+          const output = Math.max(0.0, Number(enterprise.plannedOutput) || 0.0);
+          const scrapRatio = Math.max(0.0, Number(scrap.inputs.scrap) || 0.0);
+          const plannedScrap = output * scrapRatio;
+          const ownScrap = Math.max(0.0, enterprise.inv("scrap"));
+          if (plannedScrap > 1e-9 && ownScrap >= plannedScrap - 1e-9) {
+            return scrap.inputs;
+          }
+          const need = Math.max(0.0, plannedScrap - ownScrap);
+          const available = Math.max(0.0, Number(engine._scrapSupplyStock) || 0.0);
+          if (need > 1e-9 && available > 1e-9) {
+            const mills = engine.activeEnterprises("steel_mill").slice()
+              .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+            let claimed = 0.0;
+            for (const mill of mills) {
+              const millOutput = Math.max(0.0, Number(mill.plannedOutput) || 0.0);
+              const millNeed = Math.max(0.0, millOutput * scrapRatio -
+                Math.max(0.0, mill.inv("scrap")));
+              if (mill === enterprise) {
+                if (available - claimed >= need - 1e-9) return scrap.inputs;
+                break;
+              }
+              claimed += Math.min(millNeed, Math.max(0.0, available - claimed));
+            }
+          }
+        }
+        return fallback;
+      }
     }
     return SECTOR_PARAMS.get(enterprise.industry).inputs;
   }

@@ -1509,9 +1509,23 @@ class Engine {
         if (!key) continue;
         if (this._startProject(enterprise, key, false, true, true)) {
           enterprise.replacementDemand = Math.max(0.0, enterprise.replacementDemand - 1.0);
-          const pending = enterprise.replacementByKey[key] || 0.0;
-          if (pending > 1e-9) {
-            enterprise.replacementByKey[key] = Math.max(0.0, pending - 1.0);
+          const queue = enterprise.replacementByKey;
+          if ((queue[key] || 0.0) > 1e-9) {
+            queue[key] = Math.max(0.0, queue[key] - 1.0);
+          } else {
+            // A farm may pick a different (upgraded) tier than the one that
+            // retired; consume the oldest outstanding entry anyway so the
+            // queue stays in step with replacementDemand and a spent key
+            // cannot be matched to a later retirement.
+            for (const [candidate, quantity] of Object.entries(queue)) {
+              if (quantity > 1e-9) {
+                queue[candidate] = quantity - 1.0;
+                break;
+              }
+            }
+          }
+          for (const candidate of Object.keys(queue)) {
+            if (queue[candidate] <= 1e-9) delete queue[candidate];
           }
           this._replacementProjectsStarted += 1;
           started += 1;
@@ -1657,6 +1671,18 @@ class Engine {
         const scrap = enterprise.inv("scrap");
         if (scrap > 1e-9) {
           this.market.submitSell(enterprise, "scrap", scrap, (prices.scrap || 0.0) * 0.95);
+        }
+      }
+      // A shell with no equipment cannot rebuild while it is stuck holding
+      // unsellable capital goods; let it sell idle stock so replacement
+      // investment can be financed instead of blocking an industry slot.
+      if (this.durablesA2 && !enterprise.equipment.size) {
+        for (const good of ["machinery", "steel", "brick"]) {
+          if (good === params.output) continue;
+          const idle = enterprise.inv(good);
+          if (idle > 1e-9) {
+            this.market.submitSell(enterprise, good, idle, (prices[good] || 0.0) * 0.95);
+          }
         }
       }
     }
@@ -1923,6 +1949,13 @@ class Engine {
         const qty = project.inventory[good] || 0.0;
         if (qty > 0) enterprise.inventory[good] = enterprise.inv(good) + qty;
       }
+      // A replacement project reserves one queue slot at start; a timeout
+      // means the machine was never delivered, so put the slot back.
+      if (project.isReplacement) {
+        enterprise.replacementDemand = (enterprise.replacementDemand || 0.0) + 1.0;
+        enterprise.replacementByKey[project.equipmentKey] =
+          (enterprise.replacementByKey[project.equipmentKey] || 0.0) + 1.0;
+      }
     } else {
       this.bank.cash += project.cash;
       for (const good of GOODS) {
@@ -2102,12 +2135,8 @@ class Engine {
         this._exitServiceFirm(enterprise);
         continue;
       }
-      let hasAssets = enterprise.equipment.size > 0 || enterprise.workers.length > 0 || enterprise.land > 0;
-      if (!hasAssets) {
-        for (const good of GOODS) {
-          if (enterprise.inv(good) > 1e-9) { hasAssets = true; break; }
-        }
-      }
+      const hasAssets = enterprise.equipment.size > 0 ||
+        enterprise.workers.length > 0 || enterprise.land > 0;
       if (hasAssets) { enterprise.dormantMonths = 0; continue; }
       enterprise.dormantMonths += 1;
       if (enterprise.dormantMonths < 6) continue;
@@ -2117,6 +2146,13 @@ class Engine {
         else this.bank.cash += enterprise.cash;
         enterprise.cash = 0.0;
       }
+      // Inventory alone must not keep an equipment-less shell alive: retire
+      // it and move leftover stock to the estate pool instead of stranding it.
+      for (const good of GOODS) {
+        const qty = enterprise.inv(good) || 0.0;
+        if (qty > 0) this.assetPool.inventory[good] += qty;
+      }
+      enterprise.inventory = zeros();
       enterprise.active = false;
     }
   }
@@ -2173,6 +2209,7 @@ class Engine {
     heir.hours = heir.standardHours;
   }
   _settleEstate(worker, heir) {
+    this._settleHouseholdDurables(worker, heir);
     const entId = this.land.enterpriseByOwner.get(worker.id);
     this.land.enterpriseByOwner.delete(worker.id);
     const mu = this.land.owners.get(worker.id) || 0.0;
@@ -2222,6 +2259,59 @@ class Engine {
     this.bank.deposits.delete(worker.id);
     worker.landOwned = 0.0;
     worker.isOwnerOperator = false;
+  }
+
+  /**
+   * A2 household durables are physical stocks. A dead worker is excluded from
+   * every stock aggregate and market, so leaving them on the object would
+   * silently strand them. Transfer to the heir, or to the estate asset pool.
+   */
+  _settleHouseholdDurables(worker, heir) {
+    if (!this.durablesA2) return;
+    const cloth = Math.max(0.0, Number(worker.cloth) || 0.0);
+    const housing = Math.max(0.0, Number(worker.housing) || 0.0);
+    const cars = Math.max(0.0, Number(worker.cars) || 0.0);
+    const scrap = Math.max(0.0, Number(worker.scrap) || 0.0);
+    const batches = Array.isArray(worker.carBatches) ? worker.carBatches : [];
+    if (heir) {
+      const heirCloth = Math.max(0.0, Number(heir.cloth) || 0.0);
+      if (heirCloth + cloth > 1e-12) {
+        heir.clothQuality = (heirCloth * (Number(heir.clothQuality) || 1.0) +
+          cloth * (Number(worker.clothQuality) || 1.0)) / (heirCloth + cloth);
+      }
+      heir.cloth = heirCloth + cloth;
+      heir.housing = Math.max(0.0, Number(heir.housing) || 0.0) + housing;
+      heir.cars = Math.max(0.0, Number(heir.cars) || 0.0) + cars;
+      heir.scrap = Math.max(0.0, Number(heir.scrap) || 0.0) + scrap;
+      if (!Array.isArray(heir.carBatches)) heir.carBatches = [];
+      let batchCars = 0.0;
+      for (const batch of batches) {
+        const quantity = Math.max(0.0, Number(batch.quantity) || 0.0);
+        if (quantity <= 1e-12) continue;
+        heir.carBatches.push({
+          quantity,
+          monthsLeft: Math.max(1.0, Number(batch.monthsLeft) || 1.0),
+        });
+        batchCars += quantity;
+      }
+      // Cars are normally backed by batches; keep any legacy balance usable.
+      if (cars - batchCars > 1e-9) {
+        heir.carBatches.push({
+          quantity: cars - batchCars,
+          monthsLeft: C.CAR_LIFETIME_MONTHS,
+        });
+      }
+    } else {
+      this.assetPool.inventory.cloth = (this.assetPool.inventory.cloth || 0.0) + cloth;
+      this.assetPool.inventory.building = (this.assetPool.inventory.building || 0.0) + housing;
+      this.assetPool.inventory.car = (this.assetPool.inventory.car || 0.0) + cars;
+      this.assetPool.inventory.scrap = (this.assetPool.inventory.scrap || 0.0) + scrap;
+    }
+    worker.cloth = 0.0;
+    worker.housing = 0.0;
+    worker.cars = 0.0;
+    worker.carBatches = [];
+    worker.scrap = 0.0;
   }
 
   // ------------------------------------------------------------------
@@ -2603,6 +2693,11 @@ class Engine {
     let capitalistCarQty = 0.0;
     // A2 durable aggregates (physical stocks / purchases, not money).
     let durableAdults = 0;
+    let adultClothStockSum = 0.0;
+    let adultClothTargetSum = 0.0;
+    let adultHousingStockSum = 0.0;
+    let adultHousingTargetSum = 0.0;
+    let adultCarStockSum = 0.0;
     let clothStockSum = 0.0;
     let clothTargetSum = 0.0;
     let clothingQualityWeighted = 0.0;
@@ -2654,6 +2749,13 @@ class Engine {
       for (const good of BUNDLE) consumptionQty[good] += quantities[good];
       if (worker.isChild) continue;
       durableAdults += 1;
+      if (this.durablesA2) {
+        adultClothStockSum += Math.max(0.0, worker.cloth || 0.0);
+        adultClothTargetSum += Math.max(0.0, worker.clothTargetStock || 0.0);
+        adultHousingStockSum += Math.max(0.0, worker.housing || 0.0);
+        adultHousingTargetSum += Math.max(0.0, worker.housingTargetStock || 0.0);
+        adultCarStockSum += Math.max(0.0, worker.cars || 0.0);
+      }
       for (const good of BUNDLE) adultQty[good] += quantities[good];
       const targets = worker.demandTargets;
       if (targets && Object.keys(targets).length) {
@@ -2690,6 +2792,11 @@ class Engine {
         carTargetSum += Math.max(0.0, capitalist.carTargetStock || 0.0);
         carPurchaseSum += Math.max(0.0, purchases.car || 0.0);
         carScrappedSum += Math.max(0.0, capitalist.carScrapped || 0.0);
+        adultClothStockSum += Math.max(0.0, capitalist.cloth || 0.0);
+        adultClothTargetSum += Math.max(0.0, capitalist.clothTargetStock || 0.0);
+        adultHousingStockSum += Math.max(0.0, capitalist.housing || 0.0);
+        adultHousingTargetSum += Math.max(0.0, capitalist.housingTargetStock || 0.0);
+        adultCarStockSum += Math.max(0.0, capitalist.cars || 0.0);
         durableAdults += 1;
       } else {
         capitalistQty.cloth += capitalist.consumedCloth;
@@ -2710,11 +2817,11 @@ class Engine {
     householdConsumptionValue += carQty * (prices.car || 0.0);
     totalConsumptionValue += carSpending;
     const carShare = totalConsumptionValue > 1e-9 ? carSpending / totalConsumptionValue : 0.0;
-    const clothStockPerAdult = durableAdults > 0 ? clothStockSum / durableAdults : 0.0;
-    const clothTargetPerAdult = durableAdults > 0 ? clothTargetSum / durableAdults : 0.0;
-    const housingStockPerAdult = durableAdults > 0 ? housingStockSum / durableAdults : 0.0;
-    const housingTargetPerAdult = durableAdults > 0 ? housingTargetSum / durableAdults : 0.0;
-    const carsPer100Adults = durableAdults > 0 ? carStockSum / durableAdults * 100.0 : 0.0;
+    const clothStockPerAdult = durableAdults > 0 ? adultClothStockSum / durableAdults : 0.0;
+    const clothTargetPerAdult = durableAdults > 0 ? adultClothTargetSum / durableAdults : 0.0;
+    const housingStockPerAdult = durableAdults > 0 ? adultHousingStockSum / durableAdults : 0.0;
+    const housingTargetPerAdult = durableAdults > 0 ? adultHousingTargetSum / durableAdults : 0.0;
+    const carsPer100Adults = durableAdults > 0 ? adultCarStockSum / durableAdults * 100.0 : 0.0;
     const clothQualityAverage = clothStockSum > 1e-9
       ? clothingQualityWeighted / clothStockSum : 1.0;
     const serviceEmployed = employed.filter((worker) => worker.industry === "service").length;
@@ -2810,11 +2917,14 @@ class Engine {
       const initial = INITIAL_PRICES[good];
       if (price > initial * 10) this._warnings.push(`${GOOD_LABELS[good]} 价格高于初始价的 10 倍`);
       if (price < initial * 0.1) this._warnings.push(`${GOOD_LABELS[good]} 价格低于初始价的 0.1 倍`);
-      const skipZeroOutput = this.durablesA2 &&
-        (good === "scrap" || (good === "car" && autoFirmCount === 0));
+      // Scrap is a by-product and car only has a producer when A2 seeds an
+      // auto factory. Neither should emit false "zero output" warnings in
+      // A2-off oracle replay or before the first auto firm exists.
+      const skipZeroOutput = good === "scrap" ||
+        (good === "car" && autoFirmCount === 0);
       if (skipZeroOutput) {
         this._zeroOutputStreak.set(good, 0);
-        zeroOutputStreak[good] = 0;
+        if (this.durablesA2) zeroOutputStreak[good] = 0;
         continue;
       }
       const output = this.productionMonth[good] || 0.0;
