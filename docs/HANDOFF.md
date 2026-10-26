@@ -4,6 +4,7 @@
 > `docs/WORKSTREAM_V0.6.md`；V0.5 人口设计见
 > `docs/DEMOGRAPHICS_DESIGN.md`；长程结果见 `docs/VALIDATION_V0.5.md`；
 > 价格指导价见 `docs/decisions/0005-guidance-prices.md`。
+> 外部参考实现/文献见 `docs/EXTERNAL_REFERENCES.md`。
 > 标准工作流：Python + 本地 Web UI 迭代，最终发行单文件 HTML
 > （`CLAUDE.md` / `CONTRIBUTING.md`）。
 

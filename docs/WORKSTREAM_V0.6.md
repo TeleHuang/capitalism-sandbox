@@ -83,6 +83,8 @@
 
 ## C 设计要点（待做）
 
+- 外部项目/论文参考：`docs/EXTERNAL_REFERENCES.md`（JAMEL、BAM engine、Eurace、Mark-0、
+  JMAB/Caiani 等；含许可证提示：GPL/AGPL 只读，MIT/Apache 可借鉴）。
 - 贷款创造存款（SFC 记账），法定准备金/资本约束；金本位可用准备金率扩张信用。
 - 贷前审查：抵押、杠杆、预期利润、贷款用途；风险溢价/违约核销。
 - MMT 央行反应函数：通胀/产出/失业 → 政策利率、准备金、国债购买/印钞速度。
